@@ -243,6 +243,12 @@ footer {
   align-items: flex-start;
 }
 
+.analysing {
+  color: var(--warn);
+  font-size: 12px;
+  align-self: center;
+}
+
 .lineage {
   margin-top: 4px;
   color: var(--warn);

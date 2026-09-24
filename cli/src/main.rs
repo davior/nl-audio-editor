@@ -491,8 +491,10 @@ fn run(cli: Cli) -> Res<()> {
                 last_modified,
                 ..Default::default()
             };
-            let p = Project::create(DirStore::new(&out), &mut e, app(), &bytes, &filename, opts)
-                .map_err(|e| e.to_string())?;
+            let mut p =
+                Project::create(DirStore::new(&out), &mut e, app(), &bytes, &filename, opts)
+                    .map_err(|e| e.to_string())?;
+            p.analyse(&mut e).map_err(|e| e.to_string())?;
             println!(
                 "Created project {} ({}) in {}",
                 p.manifest.project.name,
@@ -640,7 +642,7 @@ fn run(cli: Cli) -> Res<()> {
                     .and_then(|n| n.to_str())
                     .ok_or("unusable file name")?
                     .to_string();
-                Project::create(
+                let mut created = Project::create(
                     DirStore::new(&dir),
                     &mut e,
                     app(),
@@ -649,6 +651,7 @@ fn run(cli: Cli) -> Res<()> {
                     CreateOptions::default(),
                 )
                 .map_err(|e| e.to_string())?;
+                created.analyse(&mut e).map_err(|e| e.to_string())?;
                 println!("Created project in {}", dir.display());
                 dir
             };

@@ -7,6 +7,12 @@ import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
 import type { ProjectSummary, Pcm, Which, SpectrogramReq } from "./types";
 
 const ready = init({ module_or_path: wasmUrl });
+
+/** Hand byte buffers back without copying them. */
+function transferFiles(files: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  const buffers = new Set(Object.values(files).map((b) => b.buffer as ArrayBuffer));
+  return Comlink.transfer(files, [...buffers]);
+}
 const projects = new Map<string, WasmProject>();
 
 function get(id: string): WasmProject {
@@ -16,7 +22,14 @@ function get(id: string): WasmProject {
 }
 
 function summary(p: WasmProject): ProjectSummary {
-  return { id: p.id(), manifest: p.manifest(), report: p.report(), state: p.state(), readOnly: p.read_only() ?? null };
+  return {
+    id: p.id(),
+    manifest: p.manifest(),
+    report: p.report(),
+    state: p.state(),
+    readOnly: p.read_only() ?? null,
+    needsAnalysis: p.needs_analysis(),
+  };
 }
 
 function keep(p: WasmProject): ProjectSummary {
@@ -49,11 +62,11 @@ const api = {
   async events(id: string): Promise<Record<string, unknown>[]> {
     return get(id).events();
   },
-  async takeChangedFiles(id: string): Promise<Record<string, Uint8Array>> {
-    return get(id).take_changed_files();
+  async takeChangedFiles(id: string, skipSource = false): Promise<Record<string, Uint8Array>> {
+    return transferFiles(get(id).take_changed_files(skipSource));
   },
   async allFiles(id: string): Promise<Record<string, Uint8Array>> {
-    return get(id).all_files();
+    return transferFiles(get(id).all_files());
   },
   async pcm(id: string, which: Which): Promise<Pcm> {
     const r = get(id).pcm(which) as Pcm;
@@ -69,6 +82,17 @@ const api = {
   async spectrogram(id: string, which: Which, req: SpectrogramReq): Promise<Uint8Array> {
     const r = get(id).spectrogram(which, req);
     return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
+  },
+  /** Columns `[c0, c1)` of a spectrogram request (rows × (c1 − c0) levels). */
+  async spectrogramPart(id: string, which: Which, req: SpectrogramReq, c0: number, c1: number): Promise<Uint8Array> {
+    const r = get(id).spectrogram_part(which, req, c0, c1);
+    return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
+  },
+  /** Log an analysis made by the analysis worker, after the core checks it describes this source. */
+  async recordAnalysis(id: string, features: Record<string, unknown>, renderHash: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.record_analysis(JSON.stringify(features), renderHash);
+    return summary(p);
   },
   async renderHash(id: string, which: Which): Promise<string> {
     return get(id).render_hash(which);

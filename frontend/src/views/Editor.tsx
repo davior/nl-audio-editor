@@ -2,7 +2,7 @@
 // Everything here is display and control; the core does the audio work.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
-import { core } from "../core/client";
+import { analyseInBackground, core } from "../core/client";
 import type { ProjectSummary, ViewState, Which } from "../core/types";
 import { debug } from "../debug";
 import { sync } from "../storage/sync";
@@ -71,6 +71,10 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const [width, setWidth] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [renderHash, setRenderHash] = useState<{ which: Which; hash: string } | null>(null);
+  // Analysis runs after the lanes appear, in a worker of its own.
+  const [analysis, setAnalysis] = useState<"running" | "done" | "failed" | "not needed">(
+    summary.needsAnalysis && !readOnly ? "running" : "not needed",
+  );
   const lanes = useRef<HTMLDivElement>(null);
   const player = useRef<Player>(new Player());
   const playFrom = useRef(0);
@@ -89,6 +93,40 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   useEffect(() => {
     core.events(id).then(setEvents, onError);
   }, [id, summary, onError]);
+
+  // The lanes come first: the analysis and the playback copy of the audio
+  // wait until the first view has been drawn (or a few seconds, whichever is first).
+  const [lanesReady, setLanesReady] = useState(false);
+  useEffect(() => {
+    const h = setTimeout(() => setLanesReady(true), 3000);
+    return () => clearTimeout(h);
+  }, []);
+
+  const latest = useRef({ onChanged, onError, detached });
+  latest.current = { onChanged, onError, detached };
+  useEffect(() => {
+    debug("analysis", analysis);
+    if (analysis !== "running" || !lanesReady) return;
+    let live = true;
+    (async () => {
+      const started = performance.now();
+      const pcm = await core.pcm(id, "source");
+      const { features, renderHash } = await analyseInBackground(pcm);
+      if (!live) return;
+      const s = await core.recordAnalysis(id, features, renderHash);
+      if (!latest.current.detached) await sync(id, s.manifest);
+      debug("analysisSeconds", (performance.now() - started) / 1000);
+      setAnalysis("done");
+      latest.current.onChanged(s);
+    })().catch((e) => {
+      if (!live) return;
+      setAnalysis("failed");
+      latest.current.onError(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, [analysis, id, lanesReady]);
 
   useEffect(() => {
     debug("project", {
@@ -144,6 +182,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
 
   // Load what the monitor plays. Playback continues from the same place.
   useEffect(() => {
+    if (!lanesReady) return;
     let live = true;
     const p = player.current;
     const was = p.playing ? p.position() : null;
@@ -160,7 +199,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     return () => {
       live = false;
     };
-  }, [id, view.monitor, onError]);
+  }, [id, view.monitor, onError, lanesReady]);
 
   useEffect(() => {
     const p = player.current;
@@ -306,7 +345,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     onSelectTf: (tfSelection: ViewState["tfSelection"]) => update({ tfSelection }),
     onZoom: (factor: number, around: number) => setView((v) => zoom(v, factor, around, duration)),
     onScroll: (dt: number) => setView((v) => scroll(v, dt, duration)),
-    revision: summary.state.steps.length,
+    renderKey: summary.state.stack_hash,
+    onComplete: () => setLanesReady(true),
   };
 
   return (
@@ -329,6 +369,15 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           )}
         </div>
         <div className="head-actions">
+          {analysis === "running" && (
+            <span
+              className="analysing"
+              data-testid="analysing"
+              title="Measuring levels, noise, lines and pauses; the lanes can be used meanwhile"
+            >
+              Analysing…
+            </span>
+          )}
           <IntegrityBadge report={summary.report} events={events.length} />
           <button
             onClick={saveBundle}

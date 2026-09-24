@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::analysis::{features, Features};
+use crate::analysis::{features, Features, FEATURES_VERSION};
 use crate::audio::{decode, AudioBuffer, SourceInfo};
 use crate::engine::{self, RenderStep};
 use crate::hash::{sha256, ZERO_HASH};
@@ -237,6 +237,8 @@ pub struct Project<S: Store> {
     /// Set when opening found problems. Nothing is written to a project that
     /// does not verify: no event is chained onto a broken log.
     read_only: Option<String>,
+    /// Render hash of the source, computed when first needed.
+    source_render_hash: std::cell::OnceCell<String>,
 }
 
 fn to_json<T: Serialize>(v: &T) -> Value {
@@ -326,6 +328,7 @@ impl<S: Store> Project<S> {
             features_cache: HashMap::new(),
             cache_renders: false,
             read_only: None,
+            source_render_hash: std::cell::OnceCell::new(),
         };
         let actor = opts.actor.clone().unwrap_or_else(Actor::user);
         p.append(
@@ -347,15 +350,81 @@ impl<S: Store> Project<S> {
             data["capture"] = rec.clone();
         }
         p.append(env, kind, &actor, data)?;
-        let src = p.source.clone();
-        let f = p.features_for(&src);
-        p.append(
+        Ok(p)
+    }
+
+    /// Render hash of the source (the samples, not the file bytes).
+    pub fn source_render_hash(&self) -> &str {
+        self.source_render_hash
+            .get_or_init(|| self.source.render_hash())
+    }
+
+    /// Whether the source still needs analysing: no `analysis.computed` event of
+    /// the current features version is in the log. The source never changes
+    /// (its hash is verified on opening), so such an event always describes it.
+    pub fn needs_analysis(&self) -> bool {
+        !self.log.events().iter().any(|e| {
+            e["type"] == "analysis.computed" && e["data"]["features_version"] == FEATURES_VERSION
+        })
+    }
+
+    /// Analyse the source and log the result (`analysis.computed`). Creating a
+    /// project does not analyse it, so an interface can show the recording
+    /// first; the command line calls this straight after `create`.
+    pub fn analyse(&mut self, env: &mut dyn Env) -> Result<()> {
+        if !self.needs_analysis() {
+            return Ok(());
+        }
+        let hash = self.source_render_hash().to_string();
+        let f = match self.features_cache.get(&hash) {
+            Some(f) => f.clone(),
+            None => features(&self.source, None),
+        };
+        self.log_analysis(env, f, &hash)
+    }
+
+    /// Log an analysis made elsewhere (a background worker in the browser),
+    /// after checking it describes this source with the current analysis.
+    pub fn record_analysis(
+        &mut self,
+        env: &mut dyn Env,
+        features: Features,
+        render_hash: &str,
+    ) -> Result<()> {
+        if features.version != FEATURES_VERSION {
+            return invalid(format!(
+                "analysis version {} is not the current version {FEATURES_VERSION}",
+                features.version
+            ));
+        }
+        if render_hash != self.source_render_hash() {
+            return invalid("the analysis describes different audio from this project's source");
+        }
+        self.log_analysis(env, features, render_hash)
+    }
+
+    fn log_analysis(&mut self, env: &mut dyn Env, f: Features, render_hash: &str) -> Result<()> {
+        if !self.needs_analysis() {
+            return Ok(());
+        }
+        self.writable()?;
+        let path = format!(
+            "analysis/features-v{}-{}.json",
+            f.version,
+            render_hash.trim_start_matches("sha256:")
+        );
+        let _ = self
+            .store
+            .replace(&path, &serde_json::to_vec(&f).expect("serialisable"));
+        self.features_cache
+            .insert(render_hash.to_string(), f.clone());
+        self.append(
             env,
             "analysis.computed",
             &Actor::system(),
             json!({
                 "features_version": f.version,
-                "render_hash": src.render_hash(),
+                "render_hash": render_hash,
                 "features_hash": sha256(&crate::provenance::jcs::canonical_bytes(&to_json(&f)).expect("finite")),
                 "summary": {
                     "duration_s": f.t1 - f.t0,
@@ -368,7 +437,7 @@ impl<S: Store> Project<S> {
                 },
             }),
         )?;
-        Ok(p)
+        Ok(())
     }
 
     /// Open and verify a project. Problems are reported in the [`OpenReport`].
@@ -472,6 +541,7 @@ impl<S: Store> Project<S> {
             features_cache: HashMap::new(),
             cache_renders: false,
             read_only,
+            source_render_hash: std::cell::OnceCell::new(),
         };
         Ok((p, report))
     }
@@ -663,6 +733,35 @@ impl<S: Store> Project<S> {
         Ok(self.render_prefix(&steps)?.0)
     }
 
+    /// The source, the stack's render or the level-matched residual, borrowed.
+    /// Renders are cached by stack hash, so asking again costs nothing (an
+    /// interface asks for every redraw).
+    pub fn audio(&mut self, which: &str) -> Result<&AudioBuffer> {
+        match which {
+            "source" => Ok(&self.source),
+            "stack" => {
+                let steps = self.render_steps();
+                if steps.is_empty() {
+                    return Ok(&self.source);
+                }
+                let key = step::stack_hash(&self.manifest.source.sha256, &steps);
+                if !self.renders.contains_key(&key) {
+                    self.render_prefix(&steps)?;
+                }
+                Ok(&self.renders[&key].0)
+            }
+            "residual" => {
+                let key = format!("residual:{}", self.state.stack_hash);
+                if !self.renders.contains_key(&key) {
+                    let r = self.residual_render()?;
+                    self.renders.insert(key.clone(), (r, Map::new()));
+                }
+                Ok(&self.renders[&key].0)
+            }
+            w => invalid(format!("unknown render `{w}` (source | stack | residual)")),
+        }
+    }
+
     /// What the stack removed, level-matched: the source passed through the
     /// stack's level steps only (DC removal, gain, normalise, compressor) minus
     /// the stack's output. With no attenuating steps it is silence; otherwise it
@@ -692,7 +791,7 @@ impl<S: Store> Project<S> {
         }
         let path = format!(
             "analysis/features-v{}-{}.json",
-            crate::analysis::FEATURES_VERSION,
+            FEATURES_VERSION,
             h.trim_start_matches("sha256:")
         );
         if let Ok(bytes) = self.store.read(&path) {
@@ -1200,6 +1299,7 @@ impl<S: Store> Project<S> {
             features_cache: self.features_cache.clone(),
             cache_renders: false,
             read_only: None,
+            source_render_hash: std::cell::OnceCell::new(),
         };
         child.append(
             env,

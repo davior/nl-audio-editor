@@ -35,6 +35,9 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **A project that does not verify is read-only, enforced in the core** — nothing can be chained onto a broken log, cloned from it or exported from it; problems are reported, never repaired.
 - **A bundle never replaces a library copy unless its log continues the copy's log exactly; an unverified bundle is not added to the library** — opening a file must never lose or overwrite recorded history.
 - **Interface state (zoom, selection, colour range, monitor) lives in the manifest, not the log** — it is not evidence; logging every zoom would bury the actions.
+- **Creating a project does not analyse it; `analysis.computed` is logged when the analysis is done** — the interface shows a recording before its analysis finishes. In the browser the analysis runs in a separate worker, and the core checks the result's render hash against its source before logging it.
+- **Imports are saved to the library in the background, the recording first and straight from the file** — the editor opens without waiting for storage; a project directory is only written once its recording is stored.
+- **Hashing is fed in 64 KiB chunks** — the same digest; a WebAssembly engine only switches to optimised code between calls, and one long call hashed a 10-minute file 5× slower.
 - **Browser end-to-end tests run against the production build, with fixtures made by the command-line tool** — tests what ships, and proves the two front ends share one record format.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 

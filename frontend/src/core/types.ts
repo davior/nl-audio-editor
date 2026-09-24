@@ -17,6 +17,8 @@ export interface ProjectSummary {
   state: StackState;
   /** Set when the project did not verify: nothing can be written to it. */
   readOnly: string | null;
+  /** The source has no analysis of the current version logged yet. */
+  needsAnalysis: boolean;
 }
 
 export type Which = "source" | "stack" | "residual";

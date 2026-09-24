@@ -65,6 +65,23 @@ function hex(sha: string): string {
   return sha.replace(/^sha256:/, "");
 }
 
+/**
+ * Store a recording in the shared blob store straight from the file the user
+ * chose (once per recording). Written before the project's own files, so a
+ * project in the library always has its recording.
+ */
+export async function persistSource(manifest: Manifest, file: Blob): Promise<void> {
+  const r = await root();
+  const blobPath = `blobs/${hex(manifest.source.sha256)}/${manifest.source.filename}`;
+  if (await exists(r, blobPath)) return;
+  const parts = blobPath.split("/");
+  const name = parts.pop()!;
+  const d = await dir(r, parts, true);
+  const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+  await w.write(file);
+  await w.close();
+}
+
 /** Persist files the core wrote. Source recordings go to the shared blob store. */
 export async function persist(projectId: string, files: Record<string, Uint8Array>, manifest: Manifest): Promise<void> {
   const r = await root();

@@ -9,3 +9,10 @@ declare global {
 export function debug(key: string, value: unknown): void {
   window.__nlae = { ...(window.__nlae ?? {}), [key]: value };
 }
+
+/** Record how long a named stage took (seconds), for performance checks. */
+export function timing(stage: string, since: number): void {
+  const t = { ...((window.__nlae?.timings as Record<string, number> | undefined) ?? {}) };
+  t[stage] = Math.round(performance.now() - since) / 1000;
+  debug("timings", t);
+}

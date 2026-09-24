@@ -131,20 +131,31 @@ control render and its comparison are stored with the capture bundle.
 - Playback starts within 100 ms of pressing play.
 - A 10 s preview of the spectral compressor renders in under 1 s in WebAssembly.
 
-**Measured (2026-09-24, headless Chromium on a 4-core cloud container, 48 kHz mono float WAV):**
+**Measured (2026-09-24, headless Chromium on a 4-core cloud container, 48 kHz mono float WAV).**
+First in M0, then after the loading work in this milestone:
 
-| File | Import → both lanes | Reopen from the library → both lanes |
-|---|---|---|
-| 1 minute | 3.0 s | 1.1 s |
-| 10 minutes | 28.8 s | 8.6 s |
+| File | Import → both lanes | Reopen → both lanes | Analysis (in the background) |
+|---|---|---|---|
+| 1 minute, M0 | 3.0 s | 1.1 s | before the editor opened |
+| 1 minute, now | 0.6 s | 0.6 s | 1.9 s |
+| 10 minutes, M0 | 28.8 s | 8.6 s | before the editor opened |
+| 10 minutes, now | 3.1 s (whole view 5.4 s) | 3.1 s (whole view 5.3 s) | 20.8 s |
 
-The 10-minute target is **not met**. On import, the full analysis (features v1: levels, true peak,
-loudness, tonal lines, quietest region, hum, speech activity) runs before the editor opens; on
-its own it takes 12.5 s natively for this file (1.4 s for one minute). On reopen, the
-recording is read from browser storage, copied into the worker, hashed and decoded, and the
-zoomed-out spectrogram computes every frame so short events are never hidden (2.2 s natively
-for ten minutes). Proposed for M1: draw the lanes first and run the analysis afterwards in a
-second worker (its event is logged when it finishes); keep a max-pooled spectrogram pyramid
-per render so zooming out never recomputes frames; hand the file to the worker without
-copying. At the length of the reference recordings (about a minute) the current times are
-workable.
+What changed:
+- Creating a project no longer analyses it. The browser analyses in a second worker once the
+  lanes are drawn, and the core logs the result after checking it describes its source.
+- Playback and analysis get their copy of the audio after the first view is drawn, not before.
+- Imports are saved to the library in the background. The recording is written straight from
+  the file the user chose, then the project.
+- Renders are borrowed rather than copied for each redraw.
+- Long views arrive in parts, left to right, and finished views are cached.
+- Files are handed to the workers without copying.
+- The file hash is fed in 64 KiB chunks. A WebAssembly engine can only switch to its optimised
+  code between calls, so hashing a 10-minute file in one call took 4.6 s; in chunks it takes
+  about 0.8 s, with the same digest.
+
+For ten minutes, first paint is about the 3 s target. What remains is decoding and hashing
+the file in WebAssembly: about 2.4 s on import and 2.3 s on reopen, when the source hash is
+verified. A warm-up run at start-up made no measurable difference and was dropped. The
+background analysis takes 20.8 s (12.5 s natively); the editor is usable meanwhile, and zooming
+redraws in about 1.5 s while it runs.

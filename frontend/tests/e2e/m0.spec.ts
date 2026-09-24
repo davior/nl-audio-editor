@@ -26,7 +26,9 @@ interface Nlae {
   playing: boolean;
   playhead: number;
   waveform: { columns: number; columnsWithSignal: number; which: string };
-  spectrogram: { columns: number; rows: number; litCells: number; which: string };
+  spectrogram: { columns: number; rows: number; litCells: number; which: string; complete: boolean };
+  analysis: "running" | "done" | "failed" | "not needed";
+  saving: number;
 }
 
 const fx: Fixtures = JSON.parse(readFileSync(join(FIX, "fixtures.json"), "utf8"));
@@ -50,6 +52,7 @@ async function lanesDrawn(page: Page, share = { columns: 0.5, cells: 0.2 }) {
       !!s.spectrogram &&
       s.waveform.which === s.view.monitor &&
       s.spectrogram.which === s.view.monitor &&
+      s.spectrogram.complete &&
       s.waveform.columnsWithSignal > share.columns * s.waveform.columns &&
       s.spectrogram.litCells > share.cells * s.spectrogram.columns * s.spectrogram.rows
     );
@@ -60,6 +63,10 @@ async function importClip(page: Page) {
   await page.getByTestId("import-input").setInputFiles(fx.wav);
   await expect(page.getByTestId("editor")).toBeVisible();
   await lanesDrawn(page);
+  // The analysis follows the lanes, and the library copy is written in the
+  // background; wait for both so event counts and the library are settled.
+  await expect.poll(async () => (await nlae(page)).analysis).toBe("done");
+  await expect.poll(async () => (await nlae(page)).saving).toBe(0);
 }
 
 /** Drag across a lane between two points given as fractions of its size. */
@@ -88,6 +95,11 @@ test("1. a recording loads and both lanes render", async ({ page }) => {
   await expect(page.getByTestId("integrity")).toHaveAttribute("data-ok", "true");
   await expect(page.getByTestId("library-entry")).toHaveCount(1);
   await expect(page.getByTestId("project-name")).toHaveText("golden_a_short");
+  // The lanes come first; the analysis follows in its own worker and is logged.
+  await expect.poll(async () => (await nlae(page)).analysis).toBe("done");
+  await expect(page.getByTestId("analysing")).toHaveCount(0);
+  await page.getByTestId("log-toggle").click();
+  await expect(page.getByTestId("log")).toContainText("analysis.computed");
 });
 
 test("2. seek and play", async ({ page }) => {

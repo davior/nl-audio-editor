@@ -74,6 +74,12 @@ level readout is shown only when the drawn data match the view exactly.
 another project is opened. It is not evidence and is not logged. Saved values are checked when
 restored; anything missing or out of range falls back to the default.
 
+**Loading.**
+- The lanes come first.
+- The analysis (features) runs afterwards in a worker of its own, with an *Analysing…* badge; the core logs it as `analysis.computed` once it has checked it describes the source.
+- Imports are saved to the library in the background (*Saving to the library…*): the recording first, straight from the file, then the project.
+- Long views arrive in parts, and each lane says *computing…* until its view is complete.
+
 **Browser storage (OPFS).** `nlae/projects/<id>/` holds each project's files;
 `nlae/blobs/<sha256>/<original filename>` holds each source recording once, shared by its
 clones. Renders are never stored (they are recomputed and cached in memory). The last open

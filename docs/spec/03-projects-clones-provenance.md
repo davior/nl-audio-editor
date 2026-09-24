@@ -49,7 +49,7 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `project.created` | project id, name |
 | `source.imported` | SHA-256, original filename, size, last-modified time (if known), container, codec, rate, channels, frames, decoder version |
 | `source.recorded` | as above, plus the capture settings the browser actually applied |
-| `analysis.computed` | features version, features hash, summary |
+| `analysis.computed` | features version, render hash of the source, features hash, summary. Once per features version; it may follow creation later (the browser shows the recording first) |
 | `step.previewed` | preview id, candidate step(s), window, window measurements, base stack hash; `kind` = `step` or `plan` |
 | `step.modified` | preview id, proposed parameters, changed parameters |
 | `step.accepted` | the full step object |

@@ -8,7 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use js_sys::{Float32Array, Object, Reflect, Uint8Array};
-use nlae_core::analysis::spectrogram::{spectrogram as draw, SpectrogramRequest};
+use nlae_core::analysis::spectrogram::{
+    spectrogram as draw, spectrogram_columns, SpectrogramRequest,
+};
 use nlae_core::analysis::{features, peaks::peaks};
 use nlae_core::audio::decode;
 use nlae_core::project::store::{MemStore, Store, StoreError};
@@ -138,6 +140,23 @@ pub fn descriptors() -> Result<JsValue, JsValue> {
     to_js(&d)
 }
 
+/// Analyse decoded audio (planar Float32Arrays) for the analysis worker:
+/// `{ features, render_hash }`. The core worker checks the hash matches its
+/// source before logging the result.
+#[wasm_bindgen]
+pub fn analyse_pcm(sample_rate: u32, channels: js_sys::Array) -> Result<JsValue, JsValue> {
+    let chans: Vec<Vec<f32>> = channels
+        .iter()
+        .map(|c| Float32Array::new(&c).to_vec())
+        .collect();
+    if chans.is_empty() || chans.iter().any(|c| c.len() != chans[0].len()) {
+        return Err(js_err("channels must be non-empty and of equal length"));
+    }
+    let audio = nlae_core::audio::AudioBuffer::new(sample_rate, chans);
+    let f = features(&audio, None);
+    to_js(&serde_json::json!({ "features": f, "render_hash": audio.render_hash() }))
+}
+
 /// Native/WebAssembly parity: resolved-chain hash and render hash, plus the pinned values.
 #[wasm_bindgen]
 pub fn parity() -> Result<JsValue, JsValue> {
@@ -158,6 +177,11 @@ pub struct WasmProject {
 impl WasmProject {
     fn new(project: Project<TrackingStore>, report: Value) -> Self {
         WasmProject { project, report }
+    }
+
+    /// Borrowed: the recording is not copied for every redraw.
+    fn audio(&mut self, which: &str) -> Result<&nlae_core::audio::AudioBuffer, JsValue> {
+        self.project.audio(which).map_err(js_err)
     }
 
     fn which(&mut self, which: &str) -> Result<nlae_core::audio::AudioBuffer, JsValue> {
@@ -244,6 +268,19 @@ impl WasmProject {
         self.project.id().to_string()
     }
 
+    /// Whether the source still needs analysing (none of the current version logged).
+    pub fn needs_analysis(&self) -> bool {
+        self.project.needs_analysis()
+    }
+
+    /// Log an analysis made by the analysis worker (features as JSON).
+    pub fn record_analysis(&mut self, features: &str, render_hash: &str) -> Result<(), JsValue> {
+        let f = serde_json::from_str(features).map_err(js_err)?;
+        self.project
+            .record_analysis(&mut WebEnv, f, render_hash)
+            .map_err(js_err)
+    }
+
     /// Why the project is read-only (it did not verify when opened), if it is.
     pub fn read_only(&self) -> Option<String> {
         self.project.read_only().map(str::to_string)
@@ -267,9 +304,13 @@ impl WasmProject {
     }
 
     /// Files written since the last call (path → Uint8Array), for persistence.
-    pub fn take_changed_files(&mut self) -> Result<JsValue, JsValue> {
+    /// With `skip_source`, the recording itself is left out (the page stores it
+    /// straight from the file it read, without a round trip through here).
+    pub fn take_changed_files(&mut self, skip_source: Option<bool>) -> Result<JsValue, JsValue> {
+        let skip = skip_source.unwrap_or(false);
         let dirty: Vec<String> = std::mem::take(&mut self.project.store.dirty)
             .into_iter()
+            .filter(|p| !(skip && p.starts_with("source/")))
             .collect();
         files_object(&self.project.store.inner, dirty.into_iter())
     }
@@ -284,8 +325,8 @@ impl WasmProject {
 
     /// Decoded audio (planar Float32Arrays): `source`, `stack` or `residual`.
     pub fn pcm(&mut self, which: &str) -> Result<JsValue, JsValue> {
-        let a = self.which(which)?;
-        planar(&a)
+        let a = self.audio(which)?;
+        planar(a)
     }
 
     /// Min/max per column over `[t0, t1)` seconds, interleaved.
@@ -296,9 +337,9 @@ impl WasmProject {
         t1: f64,
         columns: u32,
     ) -> Result<Float32Array, JsValue> {
-        let a = self.which(which)?;
+        let a = self.audio(which)?;
         let (s0, s1) = (a.time_to_sample(t0), a.time_to_sample(t1));
-        let p = peaks(&a, s0, s1, columns as usize);
+        let p = peaks(a, s0, s1, columns as usize);
         let flat: Vec<f32> = p.iter().flat_map(|(lo, hi)| [*lo, *hi]).collect();
         Ok(Float32Array::from(flat.as_slice()))
     }
@@ -306,14 +347,29 @@ impl WasmProject {
     /// Spectrogram levels (0–255, rows × columns, top row = highest frequency).
     pub fn spectrogram(&mut self, which: &str, request: JsValue) -> Result<Uint8Array, JsValue> {
         let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
-        let a = self.which(which)?;
-        Ok(Uint8Array::from(draw(&a, &req).as_slice()))
+        let a = self.audio(which)?;
+        Ok(Uint8Array::from(draw(a, &req).as_slice()))
     }
 
     /// Render hash of `source`, `stack` or `residual`: the same hash native
     /// builds record as a step's `output_hash`.
     pub fn render_hash(&mut self, which: &str) -> Result<String, JsValue> {
-        Ok(self.which(which)?.render_hash())
+        Ok(self.audio(which)?.render_hash())
+    }
+
+    /// Columns `[c0, c1)` of a spectrogram request (rows × (c1 − c0) levels).
+    pub fn spectrogram_part(
+        &mut self,
+        which: &str,
+        request: JsValue,
+        c0: u32,
+        c1: u32,
+    ) -> Result<Uint8Array, JsValue> {
+        let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
+        let a = self.audio(which)?;
+        Ok(Uint8Array::from(
+            spectrogram_columns(a, &req, c0 as usize, c1 as usize).as_slice(),
+        ))
     }
 
     pub fn features(&mut self, which: &str) -> Result<JsValue, JsValue> {

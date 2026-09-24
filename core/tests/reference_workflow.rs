@@ -28,7 +28,7 @@ fn project(clip: &Clip, name: &str, env: &mut FixedEnv) -> Project<MemStore> {
         name: Some(name.into()),
         ..Default::default()
     };
-    Project::create(
+    let mut p = Project::create(
         MemStore::new(),
         env,
         app(),
@@ -36,7 +36,9 @@ fn project(clip: &Clip, name: &str, env: &mut FixedEnv) -> Project<MemStore> {
         &format!("{name}.wav"),
         opts,
     )
-    .unwrap()
+    .unwrap();
+    p.analyse(env).unwrap();
+    p
 }
 
 fn draft(op: &str, params: Value, scope: Scope) -> StepDraft {

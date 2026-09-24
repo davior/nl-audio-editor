@@ -21,7 +21,7 @@ fn app() -> AppInfo {
 }
 
 fn new_project(env: &mut FixedEnv) -> Project<MemStore> {
-    Project::create(
+    let mut p = Project::create(
         MemStore::new(),
         env,
         app(),
@@ -29,7 +29,55 @@ fn new_project(env: &mut FixedEnv) -> Project<MemStore> {
         "field recording.wav",
         CreateOptions::default(),
     )
-    .unwrap()
+    .unwrap();
+    p.analyse(env).unwrap();
+    p
+}
+
+#[test]
+fn analysis_follows_creation_and_can_come_from_elsewhere() {
+    let mut env = FixedEnv::default();
+    let mut p = Project::create(
+        MemStore::new(),
+        &mut env,
+        app(),
+        &short_clip(),
+        "field recording.wav",
+        CreateOptions::default(),
+    )
+    .unwrap();
+    assert!(p.needs_analysis(), "creating a project does not analyse it");
+    assert_eq!(p.log.len(), 2);
+
+    // Made elsewhere (a background worker): accepted only for this source.
+    let f = crate::analysis::features(&p.source, None);
+    let other = crate::analysis::features(
+        &crate::audio::AudioBuffer::mono(48000, vec![0.1; 48000]),
+        None,
+    );
+    let wrong = crate::audio::AudioBuffer::mono(48000, vec![0.1; 48000]).render_hash();
+    assert!(p.record_analysis(&mut env, other, &wrong).is_err());
+    let mut old = f.clone();
+    old.version = 1;
+    let hash = p.source_render_hash().to_string();
+    assert!(p.record_analysis(&mut env, old, &hash).is_err());
+    p.record_analysis(&mut env, f.clone(), &hash).unwrap();
+    assert!(!p.needs_analysis());
+    assert_eq!(p.log.len(), 3);
+    // Once only.
+    p.record_analysis(&mut env, f.clone(), &hash).unwrap();
+    p.analyse(&mut env).unwrap();
+    assert_eq!(p.log.len(), 3);
+
+    // The same as analysing here.
+    let mut q = new_project(&mut FixedEnv::default());
+    let a = &p.log.events()[2]["data"];
+    let b = &q.log.events()[2]["data"];
+    assert_eq!(a["features_hash"], b["features_hash"]);
+    assert_eq!(a["render_hash"], b["render_hash"]);
+    assert!(!q.needs_analysis());
+    q.analyse(&mut FixedEnv::default()).unwrap();
+    assert_eq!(q.log.len(), 3);
 }
 
 fn draft(op: &str, params: serde_json::Value, scope: Scope) -> StepDraft {
@@ -485,4 +533,27 @@ fn the_final_render_ends_with_the_limiter() {
         PreviewOptions::default(),
     );
     assert!(e.is_err());
+}
+
+#[test]
+fn borrowed_renders_are_the_renders() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let source = p.source.clone();
+    assert_eq!(p.audio("stack").unwrap(), &source);
+    let pv = p
+        .preview(
+            &mut env,
+            vec![draft("line_reduce", json!({}), Scope::Clip)],
+            PreviewOptions::default(),
+        )
+        .unwrap();
+    p.accept(&mut env, &pv.record.preview_id, AcceptOptions::default())
+        .unwrap();
+    let stack = p.current_render().unwrap();
+    let residual = p.residual_render().unwrap();
+    assert_eq!(p.audio("stack").unwrap(), &stack);
+    assert_eq!(p.audio("residual").unwrap(), &residual);
+    assert_eq!(p.audio("source").unwrap(), &source);
+    assert!(p.audio("other").is_err());
 }
