@@ -39,9 +39,18 @@ async function say(page: Page, words: string): Promise<Locator> {
 async function storedEvents(page: Page): Promise<Event[]> {
   const id = (await nlae(page)).project.id;
   const text = await page.evaluate(async (id) => {
-    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("nlae");
-    const dir = await (await root.getDirectoryHandle("projects")).getDirectoryHandle(id);
-    return (await (await dir.getFileHandle("events.jsonl")).getFile()).text();
+    // The app may be saving: a replaced file is briefly missing or unreadable, so read again.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("nlae");
+        const dir = await (await root.getDirectoryHandle("projects")).getDirectoryHandle(id);
+        return await (await (await dir.getFileHandle("events.jsonl")).getFile()).text();
+      } catch (e) {
+        const passing = e instanceof DOMException && (e.name === "NotReadableError" || e.name === "NotFoundError");
+        if (!passing || attempt >= 5) throw e;
+        await new Promise((r) => setTimeout(r, 20 * attempt));
+      }
+    }
   }, id);
   return text
     .trimEnd()

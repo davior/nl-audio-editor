@@ -40,12 +40,29 @@ async function exists(base: FileSystemDirectoryHandle, path: string): Promise<bo
   }
 }
 
+/**
+ * Read a file through a fresh handle. Saving replaces a file: for a moment
+ * its name is missing (NotFoundError), and a file object taken before the
+ * replacement can no longer be read (NotReadableError). Both pass, so read again.
+ */
+async function readFresh(handle: () => Promise<FileSystemFileHandle>): Promise<Uint8Array> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const f = await (await handle()).getFile();
+      return new Uint8Array(await f.arrayBuffer());
+    } catch (e) {
+      const passing = e instanceof DOMException && (e.name === "NotReadableError" || e.name === "NotFoundError");
+      if (!passing || attempt >= 5) throw e;
+      await new Promise((r) => setTimeout(r, 20 * attempt));
+    }
+  }
+}
+
 async function readFile(base: FileSystemDirectoryHandle, path: string): Promise<Uint8Array> {
   const parts = path.split("/");
   const name = parts.pop()!;
   const d = await dir(base, parts, false);
-  const f = await (await d.getFileHandle(name)).getFile();
-  return new Uint8Array(await f.arrayBuffer());
+  return readFresh(() => d.getFileHandle(name));
 }
 
 async function walk(d: FileSystemDirectoryHandle, prefix: string, out: Record<string, Uint8Array>): Promise<void> {
@@ -55,8 +72,7 @@ async function walk(d: FileSystemDirectoryHandle, prefix: string, out: Record<st
     if (handle.kind === "directory") {
       await walk(handle as FileSystemDirectoryHandle, path, out);
     } else {
-      const f = await (handle as FileSystemFileHandle).getFile();
-      out[path] = new Uint8Array(await f.arrayBuffer());
+      out[path] = await readFresh(() => d.getFileHandle(name));
     }
   }
 }
