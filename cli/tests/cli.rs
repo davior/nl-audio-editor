@@ -25,8 +25,10 @@ fn preview_id(text: &str) -> String {
         .collect()
 }
 
-fn workdir() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("nlae-cli-test-{}", std::process::id()));
+/// A fresh directory of this test's own: tests run in parallel in one
+/// process, so they must never share (or clear) a directory.
+fn workdir(test: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("nlae-cli-test-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -34,7 +36,7 @@ fn workdir() -> PathBuf {
 
 #[test]
 fn record_preview_accept_replay_export() {
-    let dir = workdir();
+    let dir = workdir("record");
     let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
     std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
 
@@ -127,8 +129,7 @@ fn nlae_fails(args: &[&str], dir: &Path) -> String {
 
 #[test]
 fn ask_in_plain_words_locally_and_through_a_model() {
-    let dir = workdir().join("ask");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = workdir("ask");
     let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
     std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
     nlae(&["new", "clip.wav", "-o", "case"], &dir);
