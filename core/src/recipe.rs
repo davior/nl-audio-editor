@@ -230,12 +230,20 @@ fn resolved_diff(
         if rec == *v || (rec.is_null() && params.get(k) == Some(v)) {
             continue; // unchanged, or a parameter used exactly as given
         }
+        let (recorded, mut new_s) = (summarise(&rec), summarise(v));
+        if recorded == new_s {
+            // Long arrays summarise alike; say they were re-measured.
+            new_s = json!(format!(
+                "{} (re-measured)",
+                new_s.as_str().unwrap_or("values")
+            ));
+        }
         out.push(DiffEntry {
             step: i,
             op: op.to_string(),
             param: format!("resolved.{k}"),
-            recorded: summarise(&rec),
-            new: summarise(v),
+            recorded,
+            new: new_s,
             reason: "measured on this clip".into(),
         });
     }

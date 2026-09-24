@@ -606,7 +606,6 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]

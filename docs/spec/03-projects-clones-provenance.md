@@ -112,7 +112,9 @@ link them (see `10-learning-and-automation.md`).
 ## Residuals
 
 - **Step residual** = step input − step output: exactly what that step removed.
-- **Project residual** = source − current output: what the whole stack removed.
+- **Project residual** = the source passed through the stack's level steps only (DC removal,
+  gain, normalise, compressor) − the current output: what the attenuating steps removed, at the
+  level it would have had. (A plain source − output would be dominated by any gain change.)
 - Each descriptor declares its residual kind: `exact`, `approximate` or `n/a` (e.g. a time
   stretch has no sample-aligned residual).
 - For the STFT-mask operations the residual is computed directly and the output is

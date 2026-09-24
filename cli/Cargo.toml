@@ -14,7 +14,6 @@ path = "src/main.rs"
 nlae-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 clap = { version = "4", features = ["derive"] }
 png = "0.18"
 getrandom = "0.3"

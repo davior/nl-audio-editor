@@ -387,7 +387,7 @@ pub fn generate(spec: &Spec) -> Clip {
         .map(|i| components.values().map(|c| c[i] as f64).sum::<f64>() as f32)
         .collect();
 
-    // Clipping of the recording in one span: flat tops at 70 % of the span's
+    // Clipping of the recording in one span: flat tops at 35 % of the span's
     // peak, written directly into the mixture so they are exactly flat. The
     // "clipping" component is what the flattening changed.
     let (c0, c1) = (
@@ -398,7 +398,7 @@ pub fn generate(spec: &Spec) -> Clip {
     let span_peak = mix[c0..c1]
         .iter()
         .fold(0.0f32, |m, &x| m.max((x - dc).abs()));
-    let limit = 0.7 * span_peak;
+    let limit = 0.35 * span_peak;
     let mut clipping = vec![0.0f32; len];
     for i in c0..c1 {
         let centred = mix[i] - dc;

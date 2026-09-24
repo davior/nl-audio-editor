@@ -641,6 +641,27 @@ impl<S: Store> Project<S> {
         Ok(self.render_prefix(&steps)?.0)
     }
 
+    /// What the stack removed, level-matched: the source passed through the
+    /// stack's level steps only (DC removal, gain, normalise, compressor) minus
+    /// the stack's output. With no attenuating steps it is silence; otherwise it
+    /// is exactly what those steps took out, at the level it would have had.
+    pub fn residual_render(&mut self) -> Result<AudioBuffer> {
+        let reg = registry();
+        let all = self.render_steps();
+        let level: Vec<RenderStep> = all
+            .iter()
+            .filter(|s| {
+                reg.get(&s.op, s.op_version)
+                    .map(|o| o.descriptor().class != crate::ops::OpClass::Attenuative)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        let (matched, _) = self.render_prefix(&level)?;
+        let (out, _) = self.render_prefix(&all)?;
+        Ok(engine::difference(&matched, &out))
+    }
+
     /// Features of a render (cached by render hash, in memory and under `analysis/`).
     pub fn features_for(&mut self, audio: &AudioBuffer) -> Features {
         let h = audio.render_hash();
