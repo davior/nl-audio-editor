@@ -83,6 +83,8 @@ test("4. save, reload and reopen: hash, view and selection are identical and the
   await page.reload();
   await page.waitForFunction(() => window.__nlae?.ready === true);
   await expect(page.getByTestId("editor")).toBeVisible();
+  // The editor reads the log after it appears: wait for it, and reopening logs nothing.
+  await expect.poll(async () => (await nlae(page)).project.events).toBe(before.project.events);
   const after = await nlae(page);
   expect(after.view).toEqual(before.view);
   expect(after.project.id).toBe(before.project.id);
