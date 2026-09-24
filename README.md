@@ -113,6 +113,12 @@ to 3,200 Hz by 12 dB", or, with an area selected on the spectrogram, "compress t
 Each proposal is previewed on a short window (Original / Before / Processed / Residual) and
 waits for *Accept* or *Reject*.
 
+To take a stretch out of the recording, select it on the waveform and use *Remove this
+stretch*; to add a pause, click where it should go and use *Insert … s of silence* (or type
+"remove 12 to 15.5 seconds", "insert 2 s of silence at 30 s"). The original is untouched: the
+edits apply to the output, the lanes keep the original's timeline with removed stretches
+hatched, *Processed* plays the result, and the exported WAV has a cue marker at each edit.
+
 **The model.** Routine requests like those are handled without a model and need no setup.
 Anything else goes to the provider chosen in the console's settings, with your words and
 analysis numbers only, never audio. The key stays in the browser and is never written to a
@@ -131,6 +137,7 @@ nlae golden --short out/                   # a 12 s synthetic test clip (omit --
 nlae new out/golden_a_short.wav -o case    # a project: the source is stored byte for byte
 nlae ask case "clean this recording up"    # routine requests are handled locally…
 nlae ask case "the hum is distracting"     # …the rest go to the model (DEEPSEEK_API_KEY; --provider ollama)
+nlae ask case "remove 2 to 3 seconds"      # time edits apply to the output; the original is untouched
 nlae plan case --recipe builtin:spoken-word-cleanup --out p.wav --residual r.wav
 nlae accept case <preview-id>              # commit a preview (ids are printed by `ask` and `plan`)
 nlae stack case                            # the stack, with what each step measured

@@ -24,6 +24,8 @@ from M2, because the reference workflow needs them.
   - `nlae ask`.
 
   Its acceptance runs end to end against a stand-in provider (`08-testing.md`).
+- Time edits (requested by the product owner, beyond the milestone plan) are built:
+  removing a stretch and inserting silence, applied to the output, with cue markers in exports.
 - Still open for M1:
   - spoken commands (`OPEN:` 16);
   - a manual run against DeepSeek, which needs the host allowed from the build environment and
