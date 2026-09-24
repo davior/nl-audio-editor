@@ -28,7 +28,34 @@ export interface ProjectSummary {
   needsAnalysis: boolean;
 }
 
-export type Which = "source" | "stack" | "residual" | "preview:original" | "preview:before" | "preview:output" | "preview:residual";
+export type Which =
+  | "source"
+  | "stack"
+  | "output"
+  | "residual"
+  | "preview:original"
+  | "preview:before"
+  | "preview:output"
+  | "preview:residual";
+
+/** A piece of the output: original audio, or inserted silence (seconds). */
+export type EditPiece =
+  | { kind: "kept"; src0: number; src1: number; out0: number }
+  | { kind: "silence"; at: number; len: number; out0: number };
+
+/** Where a time edit shows (seconds of the original, and of the output). */
+export type EditMark =
+  | { kind: "removed"; from_s: number; to_s: number; duration_s: number; at_output_s: number }
+  | { kind: "inserted"; at_s: number; duration_s: number; at_output_s: number };
+
+/** How the stack's time edits lay the original out in the output. */
+export interface EditMap {
+  edited: boolean;
+  duration_s: number;
+  original_duration_s: number;
+  pieces: EditPiece[];
+  marks: EditMark[];
+}
 
 export interface Pcm {
   sampleRate: number;

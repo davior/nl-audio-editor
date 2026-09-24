@@ -39,6 +39,8 @@ interface Props {
   onPreview: (p: PreviewInfo | null, accepted?: boolean) => void;
   onError: (e: unknown) => void;
   save: () => Promise<void>;
+  /** A request made with a button elsewhere; handled as if typed (each new `n` once). */
+  request?: { words: string; n: number } | null;
 }
 
 type Descriptor = {
@@ -199,7 +201,7 @@ function ProposalCard({
   );
 }
 
-export function Console({ summary, selection, unavailable, onSummary, onListen, onPreview, onError, save }: Props) {
+export function Console({ summary, selection, unavailable, onSummary, onListen, onPreview, onError, save, request }: Props) {
   const id = summary.id;
   const [turns, setTurns] = useState<ConsoleTurn[]>([]);
   const [words, setWords] = useState("");
@@ -243,13 +245,13 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     onPreview({ record: r.record, window: r.window });
   };
 
-  const ask = async () => {
-    const w = words.trim();
+  const ask = async (text?: string) => {
+    const w = (text ?? words).trim();
     if (!w || busy) return;
     const tid = next.current++;
     const open = turns.some((t) => t.status === "proposal");
     setTurns((ts) => [...ts, { id: tid, words: w, via: null, status: "working" }]);
-    setWords("");
+    if (text === undefined) setWords("");
     setBusy(true);
     try {
       const route = await core.route(w, selection);
@@ -331,6 +333,12 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
       setBusy(false);
     }
   };
+
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  useEffect(() => {
+    if (request) void askRef.current(request.words);
+  }, [request]);
 
   const decide = async (tid: number, f: () => Promise<ProjectSummary>, outcome: string) => {
     setBusy(true);

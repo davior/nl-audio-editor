@@ -24,6 +24,12 @@ export function describe(s: Step): string {
       return `${String(r.mode)} mode, ratio ${n("ratio")}, max −${n("max_reduction_db")} dB`;
     case "compressor":
       return `threshold ${n("threshold_dbfs")} dBFS, ratio ${n("ratio")}`;
+    case "remove_time": {
+      const sc = s.scope as { t0?: number; t1?: number };
+      return `removes ${sc.t0?.toFixed(3)}–${sc.t1?.toFixed(3)} s of the original (${n("removed_s", 3)} s)`;
+    }
+    case "insert_silence":
+      return `inserts ${n("inserted_s", 3)} s of silence at ${n("at_s", 3)} s of the original`;
     default:
       return "";
   }
@@ -37,6 +43,7 @@ export function StackPanel({
   brokenAtLine,
   onUndo,
   onRate,
+  output,
 }: {
   state: StackState;
   onClone: (atStep?: string) => void;
@@ -47,6 +54,8 @@ export function StackPanel({
   onUndo?: () => void;
   /** Rate the stack as it stands, 1–5. */
   onRate?: (overall: number) => void;
+  /** With time edits: the output's length and the original's (seconds). */
+  output?: { duration: number; original: number } | null;
 }) {
   return (
     <div className="panel" data-testid="stack">
@@ -64,6 +73,12 @@ export function StackPanel({
         </div>
       )}
       {state.steps.length === 0 && brokenAtLine === null && <div className="muted">No steps yet. The original is untouched.</div>}
+      {output && (
+        <div className="output-length" data-testid="output-length">
+          Output {output.duration.toFixed(3)} s (original {output.original.toFixed(3)} s). Removed stretches are shaded on the lanes and
+          skipped when playing <i>Processed</i>.
+        </div>
+      )}
       {(onUndo || onRate) && state.steps.length > 0 && (
         <div className="stack-actions">
           {onUndo && (

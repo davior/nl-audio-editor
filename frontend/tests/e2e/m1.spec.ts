@@ -4,12 +4,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { drag, fx, importClip, lanesDrawn, nlae, start } from "./helpers";
+import { drag, fx, importClip, lanesDrawn, logged, nlae, say, start } from "./helpers";
 import { MOCK_URL, seenByMock } from "./mock-model";
 
 const KEY = "sk-nlae-e2e-7c1f9a2b40d6";
-
-type Event = { seq: number; type: string; actor: Record<string, unknown>; data: Record<string, unknown>; hash: string };
 
 /** Point the console at the stand-in provider, through the settings dialog. */
 async function useMockModel(page: Page, key = KEY) {
@@ -21,47 +19,6 @@ async function useMockModel(page: Page, key = KEY) {
   await page.getByTestId("settings-key").fill(key);
   await page.getByTestId("settings-save").click();
   await expect(page.getByTestId("assistant-settings")).toHaveText("mock · mock-1");
-}
-
-/** Type a request; resolves with its turn once it has settled. */
-async function say(page: Page, words: string): Promise<Locator> {
-  const turns = page.getByTestId("turn");
-  const n = await turns.count();
-  await page.getByTestId("console-input").fill(words);
-  await page.getByTestId("console-send").click();
-  await expect(turns).toHaveCount(n + 1);
-  const turn = turns.nth(n);
-  await expect(turn).toHaveAttribute("data-status", /^(proposal|reply|done|error)$/);
-  return turn;
-}
-
-/** The project's log as stored in the library. */
-async function storedEvents(page: Page): Promise<Event[]> {
-  const id = (await nlae(page)).project.id;
-  const text = await page.evaluate(async (id) => {
-    // The app may be saving: a replaced file is briefly missing or unreadable, so read again.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("nlae");
-        const dir = await (await root.getDirectoryHandle("projects")).getDirectoryHandle(id);
-        return await (await (await dir.getFileHandle("events.jsonl")).getFile()).text();
-      } catch (e) {
-        const passing = e instanceof DOMException && (e.name === "NotReadableError" || e.name === "NotFoundError");
-        if (!passing || attempt >= 5) throw e;
-        await new Promise((r) => setTimeout(r, 20 * attempt));
-      }
-    }
-  }, id);
-  return text
-    .trimEnd()
-    .split("\n")
-    .map((l) => JSON.parse(l) as Event);
-}
-
-/** Wait until the stored log holds `count` events of a type; returns them. */
-async function logged(page: Page, type: string, count = 1): Promise<Event[]> {
-  await expect.poll(async () => (await storedEvents(page)).filter((e) => e.type === type).length).toBe(count);
-  return (await storedEvents(page)).filter((e) => e.type === type);
 }
 
 const opsOf = (steps: Locator) => steps.evaluateAll((els) => els.map((e) => e.getAttribute("data-op")));

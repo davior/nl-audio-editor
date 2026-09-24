@@ -2,8 +2,9 @@
 // Everything here is display and control; the core does the audio work.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
+import { TimeMap } from "../audio/timemap";
 import { analyseInBackground, core } from "../core/client";
-import type { ProjectSummary, ViewState, Which } from "../core/types";
+import type { EditMap, ProjectSummary, ViewState, Which } from "../core/types";
 import { debug } from "../debug";
 import { sync } from "../storage/sync";
 import { IntegrityBadge } from "./IntegrityBadge";
@@ -88,6 +89,11 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   previewRef.current = preview;
   const viewBeforePreview = useRef<ViewState | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("f32");
+  // Where the stack's time edits put the original in the output.
+  const [editMap, setEditMap] = useState<EditMap | null>(null);
+  // Requests made with buttons go through the console, as if typed.
+  const [consoleRequest, setConsoleRequest] = useState<{ words: string; n: number } | null>(null);
+  const [insertLength, setInsertLength] = useState(1);
   // Analysis runs after the lanes appear, in a worker of its own.
   const [analysis, setAnalysis] = useState<"running" | "done" | "failed" | "not needed">(
     summary.needsAnalysis && !readOnly ? "running" : "not needed",
@@ -199,18 +205,37 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     };
   }, [flushRef, saveView]);
 
+  useEffect(() => {
+    let live = true;
+    core.editMap(id).then((m) => {
+      if (!live) return;
+      setEditMap(m);
+      debug("editMap", m);
+    }, onError);
+    return () => {
+      live = false;
+    };
+  }, [id, summary.state.stack_hash, onError]);
+
   // Load what the monitor plays. Playback continues from the same place.
   useEffect(() => {
-    if (!lanesReady) return;
+    if (!lanesReady || !editMap) return;
     let live = true;
     const p = player.current;
     const was = p.playing ? p.position() : null;
+    // The processed monitor plays what will be exported: removed stretches
+    // skipped, inserted silence heard. The lanes keep the original's timeline.
+    const edited = view.monitor === "stack" && editMap.edited;
     core
-      .pcm(id, view.monitor)
+      .pcm(id, edited ? "output" : view.monitor)
       .then((pcm) => {
         if (!live) return;
         // Preview audio covers only the preview window.
-        p.load(pcm, view.monitor.startsWith("preview:") ? (previewRef.current?.window[0] ?? 0) : 0);
+        p.load(
+          pcm,
+          view.monitor.startsWith("preview:") ? (previewRef.current?.window[0] ?? 0) : 0,
+          edited ? new TimeMap(editMap.pieces) : null,
+        );
         debug("monitorLoaded", view.monitor);
         if (was !== null) void p.play(was).then(() => setPlaying(true));
         else setPlaying(false);
@@ -219,7 +244,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     return () => {
       live = false;
     };
-  }, [id, view.monitor, onError, lanesReady, preview]);
+  }, [id, view.monitor, onError, lanesReady, preview, editMap]);
 
   useEffect(() => {
     const p = player.current;
@@ -346,20 +371,28 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     }
   };
 
+  const playheadBeforePreview = useRef(0);
   const openPreview = (p: PreviewInfo | null, accepted = false) => {
     player.current.stop();
     setPlaying(false);
     if (p) {
-      if (!previewRef.current) viewBeforePreview.current = viewRef.current;
+      if (!previewRef.current) {
+        viewBeforePreview.current = viewRef.current;
+        playheadBeforePreview.current = playhead;
+      }
       previewRef.current = p;
       setPreview(p);
       setPlayhead(p.window[0]);
-      setView((v) => ({ ...v, t0: p.window[0], t1: p.window[1], monitor: "preview:output" }));
+      // A time edit changes the length, so its result cannot be drawn on the
+      // original's timeline: show the stretch on "Before"; "Processed" plays the result.
+      const timeEdit = p.record.steps.some((st) => st.op === "remove_time" || st.op === "insert_silence");
+      setView((v) => ({ ...v, t0: p.window[0], t1: p.window[1], monitor: timeEdit ? "preview:before" : "preview:output" }));
     } else if (previewRef.current) {
       const back = viewBeforePreview.current;
       viewBeforePreview.current = null;
       previewRef.current = null;
       setPreview(null);
+      setPlayhead(playheadBeforePreview.current);
       setView((v) => ({
         ...v,
         ...(back ? { t0: back.t0, t1: back.t1 } : {}),
@@ -391,6 +424,31 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       setBusy(null);
     }
   };
+
+  const askConsole = (words: string) => setConsoleRequest((r) => ({ words, n: (r?.n ?? 0) + 1 }));
+
+  // Removed stretches (shaded) and inserted silences (marked) on the lanes,
+  // accepted ones and the one being previewed.
+  const overlay = (() => {
+    if (width <= 0) return [];
+    const span = view.t1 - view.t0;
+    const x = (t: number) => ((t - view.t0) / span) * width;
+    const items: { kind: "removed" | "inserted"; from: number; to: number; label: string; proposed: boolean }[] = [];
+    for (const m of editMap?.marks ?? []) {
+      if (m.kind === "removed")
+        items.push({ kind: "removed", from: m.from_s, to: m.to_s, label: `removed ${m.duration_s.toFixed(3)} s`, proposed: false });
+      else items.push({ kind: "inserted", from: m.at_s, to: m.at_s, label: `+${m.duration_s.toFixed(3)} s silence`, proposed: false });
+    }
+    for (const st of preview?.record.steps ?? []) {
+      const sc = st.scope as { kind: string; t0?: number; t1?: number };
+      const r = st.resolved as Record<string, number>;
+      if (st.op === "remove_time" && sc.t0 !== undefined && sc.t1 !== undefined)
+        items.push({ kind: "removed", from: sc.t0, to: sc.t1, label: "to be removed", proposed: true });
+      if (st.op === "insert_silence")
+        items.push({ kind: "inserted", from: r.at_s, to: r.at_s, label: `+${r.duration_s.toFixed(3)} s silence?`, proposed: true });
+    }
+    return items.map((it) => ({ ...it, x0: x(it.from), x1: x(it.to) })).filter((it) => it.x1 >= 0 && it.x0 <= width);
+  })();
 
   const undo = () =>
     act("Removing the last step…", async () => {
@@ -653,6 +711,31 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             <Waveform {...laneProps} />
             <Spectrogram {...laneProps} />
             <TimeAxis view={view} width={width} />
+            {overlay.length > 0 && (
+              <div className="edit-overlay" aria-hidden="true">
+                {overlay.map((it, i) =>
+                  it.kind === "removed" ? (
+                    <div
+                      key={i}
+                      className={`edit-removed${it.proposed ? " proposed" : ""}`}
+                      style={{ left: Math.max(0, it.x0), width: Math.max(1, Math.min(width, it.x1) - Math.max(0, it.x0)) }}
+                      data-testid={it.proposed ? "edit-proposed" : "edit-removed"}
+                    >
+                      <span>{it.label}</span>
+                    </div>
+                  ) : (
+                    <div
+                      key={i}
+                      className={`edit-inserted${it.proposed ? " proposed" : ""}`}
+                      style={{ left: it.x0 }}
+                      data-testid={it.proposed ? "edit-proposed" : "edit-inserted"}
+                    >
+                      <span>{it.label}</span>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -664,9 +747,20 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             : "Drag on the waveform to select a time range."}
         </span>
         {view.selection && (
-          <button className="small" onClick={() => update({ selection: null })}>
-            clear
-          </button>
+          <>
+            <button className="small" onClick={() => update({ selection: null })}>
+              clear
+            </button>
+            <button
+              className="small"
+              disabled={!!consoleUnavailable}
+              onClick={() => askConsole(`remove ${view.selection!.t0.toFixed(3)} to ${view.selection!.t1.toFixed(3)} s`)}
+              data-testid="remove-stretch"
+              title="Leave this stretch out of the output (previewed first; the original is untouched)"
+            >
+              Remove this stretch
+            </button>
+          </>
         )}
         <span data-testid="tf-selection">
           {view.tfSelection
@@ -678,6 +772,28 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             clear
           </button>
         )}
+        <span className="insert-silence">
+          Insert{" "}
+          <input
+            type="number"
+            min={0.001}
+            max={3600}
+            step={0.1}
+            value={insertLength}
+            onChange={(e) => setInsertLength(Number(e.target.value))}
+            data-testid="insert-length"
+          />{" "}
+          s of silence{" "}
+          <button
+            className="small"
+            disabled={!!consoleUnavailable || !(insertLength > 0)}
+            onClick={() => askConsole(`insert ${insertLength} s of silence at ${playhead.toFixed(3)} s`)}
+            data-testid="insert-silence"
+            title="At the playhead: click the waveform to place it"
+          >
+            at the playhead ({fmtTime(playhead)})
+          </button>
+        </span>
       </div>
 
       <Console
@@ -689,6 +805,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
         onPreview={openPreview}
         onError={onError}
         save={save}
+        request={consoleRequest}
       />
 
       <div className="panels">
@@ -699,6 +816,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           brokenAtLine={failure ? Number(failure.line) : null}
           onUndo={readOnly || busy || preview ? undefined : undo}
           onRate={readOnly || busy ? undefined : rate}
+          output={editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null}
         />
         <div className="panel">
           <div className="panel-head">

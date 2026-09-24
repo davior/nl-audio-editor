@@ -737,3 +737,65 @@ button.accept {
   color: var(--bad);
   overflow-wrap: anywhere;
 }
+
+/* Time edits drawn over the lanes (original timeline) */
+.lanes {
+  position: relative;
+}
+
+.edit-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.edit-removed {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, rgb(255 123 123 / 22%) 0 6px, rgb(11 14 17 / 55%) 6px 12px);
+  border-left: 1px solid var(--bad);
+  border-right: 1px solid var(--bad);
+}
+
+.edit-removed.proposed {
+  background: rgb(255 214 102 / 12%);
+  border-color: var(--warn);
+  border-style: dashed;
+}
+
+.edit-inserted {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid var(--accent);
+}
+
+.edit-inserted.proposed {
+  border-left: 2px dashed var(--warn);
+}
+
+.edit-removed span,
+.edit-inserted span {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text);
+  background: rgb(11 14 17 / 75%);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.insert-silence input {
+  width: 64px;
+}
+
+.output-length {
+  font-size: 12px;
+  color: var(--warn);
+  margin-bottom: 8px;
+}
