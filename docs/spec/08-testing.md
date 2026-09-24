@@ -82,6 +82,39 @@ smears their partials across cells), which caps what per-cell processing can sep
 the `transient` reference moved from the median to the upper quartile (speech onsets were
 being treated as transients), and `threshold_db` gained a mode-dependent `auto` default.
 
+**Line detection on a short clip** (`OPEN:` for the product owner): on the 12-second variant
+of clip A (`nlae golden --short`), detection reports the four real lines (50, 100, 150 Hz hum;
+750 and 3,150 Hz) at widths of 5.9–8.8 Hz, present in 100% of segments — and also two voice
+harmonics, 583.7 Hz and 1,861.5 Hz (widths 17.6 and 20.5 Hz, present in 75% and 67% of
+segments), which the built-in recipe then cuts by about 8.8 dB. Both are multiples of a
+~116.5 Hz pitch the synthetic voice holds near phrase ends, lifted by formants. It does not
+happen on the 60-second clips. Proposal: a line must also be present in the speech pauses —
+hum and whines do not stop when people stop talking — before `line_reduce` cuts it
+automatically.
+
+## Browser end to end (Playwright, headless Chromium, fake microphone)
+
+Run against the production build; fixtures are made by the command-line tool (a 12 s golden
+clip, a project processed with the built-in recipe and packed, and a copy of that bundle with
+one logged value changed and both ZIP checksums fixed, as a careful forger would).
+All pass (2026-09-24, about 21 s):
+
+| # | Scenario | Checks |
+|---|---|---|
+| 1 | Import a recording | both lanes draw; the source hash equals the file's SHA-256; badge verified |
+| 2 | Seek and play | click seeks; playback advances; pause holds; stop returns to the start point |
+| 3 | Select | a time range on the waveform and a time × frequency area on the spectrogram land at the right seconds and hertz |
+| 4 | Save, reload, reopen | after a page reload, and in a fresh browser profile from the downloaded bundle: the same view (zoom, scale, range, monitor, both selections), hashes and project; the chain verifies; the export itself is logged |
+| 5 | Clone | cloning after step 2 gives a two-step clone with the parent's step-2 stack hash, lineage shown, nested under its parent in the library; after a reload the clone's log and its parent's log verify; the parent's log records the clone |
+| 6 | Tampered bundle | the badge names the edited event (line 5, seq 4); the project is read-only; it is not added to the library; the log stops at the edit |
+| 7 | Bundle from the command line | its four steps show in order; the stack hash matches; the browser's render of the stack has the **same render hash the command line recorded** (native and browser produce the same samples) |
+| 8 | Record from the microphone | echo cancellation, noise suppression and gain control requested off and reported off; the `source.recorded` event is in the log |
+| — | Core parity in the browser | the parity chain computes the pinned hashes in Chromium, as it does natively and in Node |
+
+Worth knowing from scenario 8: Chromium's fake microphone delivered **2 channels although 1
+was requested**. The capture record shows it (requested 1, applied 2), which is the reason the
+applied settings are logged.
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the
@@ -94,3 +127,21 @@ control render and its comparison are stored with the capture bundle.
 - A 10-minute 48 kHz mono file shows both lanes in under 3 s in the browser.
 - Playback starts within 100 ms of pressing play.
 - A 10 s preview of the spectral compressor renders in under 1 s in WebAssembly.
+
+**Measured (2026-09-24, headless Chromium on a 4-core cloud container, 48 kHz mono float WAV):**
+
+| File | Import → both lanes | Reopen from the library → both lanes |
+|---|---|---|
+| 1 minute | 3.0 s | 1.1 s |
+| 10 minutes | 28.8 s | 8.6 s |
+
+The 10-minute target is **not met**. On import, the full analysis (features v1: levels, true peak,
+loudness, tonal lines, quietest region, hum, speech activity) runs before the editor opens; on
+its own it takes 12.5 s natively for this file (1.4 s for one minute). On reopen, the
+recording is read from browser storage, copied into the worker, hashed and decoded, and the
+zoomed-out spectrogram computes every frame so short events are never hidden (2.2 s natively
+for ten minutes). Proposed for M1: draw the lanes first and run the analysis afterwards in a
+second worker (its event is logged when it finishes); keep a max-pooled spectrogram pyramid
+per render so zooming out never recomputes frames; hand the file to the worker without
+copying. At the length of the reference recordings (about a minute) the current times are
+workable.

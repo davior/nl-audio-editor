@@ -29,8 +29,13 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Project directory as the working form, `.nlae` ZIP as the portable form** — true append-only logging while working; one file to share.
 - **Own minimal stored-only ZIP writer/reader** — reproducible bundles (sorted entries, fixed timestamps), no compression of evidence audio, few dependencies.
 - **Source stored under its original filename** — the invariant forbids renaming; its hash is recorded alongside.
+- **No `wasm-opt` on the WebAssembly module** — the parity test verifies exactly what the compiler produced; the optimiser rewrites the binary and is not needed at ~2 MB.
 - **React + TypeScript + Vite for the frontend** — widely known, adequate for canvas-heavy views and generated panels.
 - **TypeScript types generated from the Rust types (ts-rs)** — the frontend cannot drift from the record formats; CI fails if they are stale.
+- **A project that does not verify is read-only, enforced in the core** — nothing can be chained onto a broken log, cloned from it or exported from it; problems are reported, never repaired.
+- **A bundle never replaces a library copy unless its log continues the copy's log exactly; an unverified bundle is not added to the library** — opening a file must never lose or overwrite recorded history.
+- **Interface state (zoom, selection, colour range, monitor) lives in the manifest, not the log** — it is not evidence; logging every zoom would bury the actions.
+- **Browser end-to-end tests run against the production build, with fixtures made by the command-line tool** — tests what ships, and proves the two front ends share one record format.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations

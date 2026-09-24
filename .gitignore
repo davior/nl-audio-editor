@@ -9,3 +9,5 @@ node_modules/
 /tests/golden/real/
 *.nlae
 .DS_Store
+/frontend/tests/e2e/.fixtures/
+*.tsbuildinfo

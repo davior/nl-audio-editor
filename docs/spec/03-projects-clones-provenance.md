@@ -109,6 +109,16 @@ edits. There are no in-project branches or layers; the interface stays a single 
 Clones forked from the same step are natural side-by-side comparisons, and dataset exports
 link them (see `10-learning-and-automation.md`).
 
+## Projects that do not verify
+
+Opening a project checks the source hash, the hash chain, the lineage and the stack
+projection. If anything fails, the problems are reported and the project is **read-only**: the
+core refuses to append an event or rewrite the manifest, so nothing can be chained onto a
+broken log and nothing can be cloned from or exported out of it. Problems are reported, never
+repaired. In the browser, a bundle that does not verify is shown but not added to the library,
+and a bundle never replaces a library copy unless its log continues the copy's log exactly
+(`07-interface.md`).
+
 ## Residuals
 
 - **Step residual** = step input − step output: exactly what that step removed.
