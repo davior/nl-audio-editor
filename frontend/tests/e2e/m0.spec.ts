@@ -25,8 +25,8 @@ interface Nlae {
   viewSaved: ViewState;
   playing: boolean;
   playhead: number;
-  waveform: { columns: number; columnsWithSignal: number };
-  spectrogram: { columns: number; rows: number; litCells: number };
+  waveform: { columns: number; columnsWithSignal: number; which: string };
+  spectrogram: { columns: number; rows: number; litCells: number; which: string };
 }
 
 const fx: Fixtures = JSON.parse(readFileSync(join(FIX, "fixtures.json"), "utf8"));
@@ -38,13 +38,18 @@ async function start(page: Page) {
   await page.waitForFunction(() => window.__nlae?.ready === true);
 }
 
-/** Both lanes have drawn: enough waveform columns carry signal and enough spectrogram cells are lit. */
+/**
+ * Both lanes have drawn what the monitor selects: enough waveform columns carry signal and enough
+ * spectrogram cells are lit.
+ */
 async function lanesDrawn(page: Page, share = { columns: 0.5, cells: 0.2 }) {
   await page.waitForFunction((share) => {
     const s = window.__nlae as unknown as Nlae | undefined;
     return (
       !!s?.waveform &&
       !!s.spectrogram &&
+      s.waveform.which === s.view.monitor &&
+      s.spectrogram.which === s.view.monitor &&
       s.waveform.columnsWithSignal > share.columns * s.waveform.columns &&
       s.spectrogram.litCells > share.cells * s.spectrogram.columns * s.spectrogram.rows
     );
@@ -233,6 +238,7 @@ test("6. a tampered bundle is flagged at the edited event and opens read-only", 
   await page.getByTestId("log-toggle").click();
   await expect(page.getByTestId("log-row")).toHaveCount(fx.tamperedLine - 1);
   await expect(page.getByTestId("log-break")).toContainText(`Line ${fx.tamperedLine} (seq ${fx.tamperedSeq})`);
+  await expect(page.getByTestId("stack-partial")).toContainText(`before line ${fx.tamperedLine}`);
 });
 
 test("7. a bundle made with the command line shows its stack, rendered bit for bit", async ({ page }) => {
@@ -257,6 +263,7 @@ test("7. a bundle made with the command line shows its stack, rendered bit for b
   await page.getByTestId("monitor-residual").click();
   await expect.poll(async () => (await nlae(page)).view.monitor).toBe("residual");
   await lanesDrawn(page);
+  await expect(page.getByTestId("spectrogram-busy")).toHaveCount(0);
 });
 
 test("8. recording from the microphone logs the settings the browser applied", async ({ page }) => {

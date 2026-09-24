@@ -30,7 +30,18 @@ export function describe(s: Step): string {
 }
 
 /** The stack, read-only in M0. Steps are added from the command line (the console comes in M1). */
-export function StackPanel({ state, onClone, canClone }: { state: StackState; onClone: (atStep?: string) => void; canClone: boolean }) {
+export function StackPanel({
+  state,
+  onClone,
+  canClone,
+  brokenAtLine,
+}: {
+  state: StackState;
+  onClone: (atStep?: string) => void;
+  canClone: boolean;
+  /** When the log did not verify: the stack shows only what was recorded before this line. */
+  brokenAtLine: number | null;
+}) {
   return (
     <div className="panel" data-testid="stack">
       <div className="panel-head">
@@ -41,7 +52,12 @@ export function StackPanel({ state, onClone, canClone }: { state: StackState; on
           </button>
         )}
       </div>
-      {state.steps.length === 0 && <div className="muted">No steps yet. The original is untouched.</div>}
+      {brokenAtLine !== null && (
+        <div className="problem-note" data-testid="stack-partial">
+          Only steps recorded before line {brokenAtLine} of the log are shown; nothing after it can be verified.
+        </div>
+      )}
+      {state.steps.length === 0 && brokenAtLine === null && <div className="muted">No steps yet. The original is untouched.</div>}
       <ol className="steps">
         {state.steps.map((s) => (
           <li key={s.step_id} data-testid="stack-step" data-op={s.op}>

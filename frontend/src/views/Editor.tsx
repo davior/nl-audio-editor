@@ -239,9 +239,12 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
 
   const update = (patch: Partial<ViewState>) => setView((v) => ({ ...v, ...patch }));
 
+  const fitRequest = useRef(0);
   const fitHeight = async () => {
+    const n = ++fitRequest.current;
     try {
       const pk = await core.peaks(id, view.monitor, 0, duration, 1);
+      if (n !== fitRequest.current) return; // a later request supersedes this one
       const peak = Math.max(Math.abs(pk[0] ?? 0), Math.abs(pk[1] ?? 0));
       update({ vZoom: peak > 0 ? Math.min(16384, Math.max(1, 0.9 / peak)) : 1 });
     } catch (e) {
@@ -499,7 +502,12 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       </div>
 
       <div className="panels">
-        <StackPanel state={summary.state} onClone={clone} canClone={!readOnly && !busy} />
+        <StackPanel
+          state={summary.state}
+          onClone={clone}
+          canClone={!readOnly && !busy}
+          brokenAtLine={failure ? Number(failure.line) : null}
+        />
         <div className="panel">
           <div className="panel-head">
             <h3>Record</h3>

@@ -308,9 +308,25 @@ canvas.lane {
   cursor: crosshair;
 }
 
+.lane-wrap {
+  position: relative;
+}
+
 .spec-wrap {
   position: relative;
   border-top: 1px solid var(--line);
+}
+
+.lane-busy {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  font-size: 11px;
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 6px;
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 .hover {
@@ -395,6 +411,15 @@ canvas.lane {
   color: var(--muted);
   font-size: 12px;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-top button {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tag {
@@ -458,6 +483,12 @@ table.log td {
 tr.unverified td {
   color: var(--bad);
   white-space: normal;
+}
+
+.problem-note {
+  color: var(--bad);
+  font-size: 12px;
+  margin-bottom: 6px;
 }
 
 .badge {

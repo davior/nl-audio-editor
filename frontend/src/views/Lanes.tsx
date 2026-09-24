@@ -99,17 +99,55 @@ function useDrag(onClick: (x: number, y: number) => void, onDrag: (x0: number, y
   };
 }
 
+/** What a lane last received, with the request it answers. */
+interface LaneData<T> {
+  which: Which;
+  t0: number;
+  t1: number;
+  columns: number;
+  values: T;
+}
+
+/** Tracks requests in flight so a lane can say it is still computing. */
+function usePending(): [boolean, () => () => void] {
+  const [count, setCount] = useState(0);
+  const start = () => {
+    setCount((c) => c + 1);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      setCount((c) => c - 1);
+    };
+  };
+  return [count > 0, start];
+}
+
+function Busy({ on, id }: { on: boolean; id: string }) {
+  return on ? (
+    <div className="lane-busy" data-testid={id}>
+      computing…
+    </div>
+  ) : null;
+}
+
 export function Waveform(p: LaneProps) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const [peaks, setPeaks] = useState<Float32Array | null>(null);
+  const [peaks, setPeaks] = useState<LaneData<Float32Array> | null>(null);
   const [drag, setDrag] = useState<[number, number] | null>(null);
+  const [pending, begin] = usePending();
   const height = 140;
   useWheel(ref, p);
 
   useEffect(() => {
     let live = true;
     if (p.width <= 0) return;
-    core.peaks(p.projectId, p.which, p.view.t0, p.view.t1, p.width).then((pk) => live && setPeaks(pk));
+    const req = { which: p.which, t0: p.view.t0, t1: p.view.t1, columns: p.width };
+    const end = begin();
+    core
+      .peaks(p.projectId, req.which, req.t0, req.t1, req.columns)
+      .then((values) => live && setPeaks({ ...req, values }))
+      .finally(end);
     return () => {
       live = false;
     };
@@ -130,9 +168,13 @@ export function Waveform(p: LaneProps) {
     g.strokeStyle = "#59c2ff";
     g.beginPath();
     let drawn = 0;
+    // Until new peaks arrive after a zoom or scroll, the last ones are drawn where they now fall.
+    const span = peaks.t1 - peaks.t0;
     for (let x = 0; x < p.width; x++) {
-      const lo = peaks[2 * x] * p.view.vZoom;
-      const hi = peaks[2 * x + 1] * p.view.vZoom;
+      const i = Math.floor(((timeAt(x + 0.5, p.width, p.view) - peaks.t0) / span) * peaks.columns);
+      if (i < 0 || i >= peaks.columns) continue;
+      const lo = peaks.values[2 * i] * p.view.vZoom;
+      const hi = peaks.values[2 * i + 1] * p.view.vZoom;
       const y0 = mid - Math.max(-1, Math.min(1, hi)) * (mid - 2);
       const y1 = mid - Math.max(-1, Math.min(1, lo)) * (mid - 2);
       g.moveTo(x + 0.5, y0);
@@ -157,7 +199,7 @@ export function Waveform(p: LaneProps) {
     g.moveTo(px + 0.5, 0);
     g.lineTo(px + 0.5, height);
     g.stroke();
-    debug("waveform", { columns: p.width, columnsWithSignal: drawn });
+    debug("waveform", { columns: p.width, columnsWithSignal: drawn, which: peaks.which, t0: peaks.t0, t1: peaks.t1 });
   }, [peaks, p.view, p.playhead, p.width, drag]);
 
   const handlers = useDrag(
@@ -170,14 +212,27 @@ export function Waveform(p: LaneProps) {
     },
   );
 
-  return <canvas ref={ref} width={p.width} height={height} className="lane" data-testid="waveform" {...handlers} />;
+  return (
+    <div className="lane-wrap">
+      <canvas ref={ref} width={p.width} height={height} className="lane" data-testid="waveform" {...handlers} />
+      <Busy on={pending} id="waveform-busy" />
+    </div>
+  );
+}
+
+interface SpecData extends LaneData<Uint8Array> {
+  rows: number;
+  fMax: number;
+  scale: ViewState["scale"];
 }
 
 export function Spectrogram(p: LaneProps) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const [levels, setLevels] = useState<Uint8Array | null>(null);
+  const image = useRef<{ canvas: HTMLCanvasElement; lit: number; topDb: number } | null>(null);
+  const [levels, setLevels] = useState<SpecData | null>(null);
   const [drag, setDrag] = useState<[number, number, number, number] | null>(null);
   const [hover, setHover] = useState<string>("");
+  const [pending, begin] = usePending();
   const height = 300;
   const fMin = 40;
   useWheel(ref, p);
@@ -197,30 +252,64 @@ export function Spectrogram(p: LaneProps) {
       db_max: 0,
       fft_at_48k: 2048,
     };
-    core.spectrogram(p.projectId, p.which, req).then((l) => live && setLevels(l));
+    const which = p.which;
+    const end = begin();
+    core
+      .spectrogram(p.projectId, which, req)
+      .then(
+        (values) =>
+          live &&
+          setLevels({ which, t0: req.t0, t1: req.t1, columns: req.columns, rows: req.rows, fMax: req.f_max, scale: req.scale, values }),
+      )
+      .finally(end);
     return () => {
       live = false;
     };
   }, [p.projectId, p.which, p.view.t0, p.view.t1, p.view.fMax, p.view.scale, p.width, p.revision]);
 
+  // Colour the levels once per arrival or range change. They arrive over −200…0 dB;
+  // the display spans the top `dbRange` dB below the loudest cell.
   useEffect(() => {
-    const c = ref.current;
-    if (!c || !levels) return;
-    const g = c.getContext("2d")!;
-    // Levels arrive over −200…0 dB; display the top `dbRange` dB below the loudest cell.
+    if (!levels) return;
+    const { values, columns, rows } = levels;
     let top = 0;
-    for (let i = 0; i < levels.length; i++) if (levels[i] > top) top = levels[i];
+    for (let i = 0; i < values.length; i++) if (values[i] > top) top = values[i];
     const topDb = (top / 255) * 200 - 200;
     const lo = topDb - p.view.dbRange;
-    const img = g.createImageData(p.width, height);
+    const canvas = image.current?.canvas ?? document.createElement("canvas");
+    canvas.width = columns;
+    canvas.height = rows;
+    const g = canvas.getContext("2d")!;
+    const img = g.createImageData(columns, rows);
     let lit = 0;
-    for (let i = 0; i < levels.length; i++) {
-      const db = (levels[i] / 255) * 200 - 200;
+    for (let i = 0; i < values.length; i++) {
+      const db = (values[i] / 255) * 200 - 200;
       const v = Math.max(0, Math.min(255, Math.round(((db - lo) / p.view.dbRange) * 255)));
       if (v > 16) lit++;
       img.data.set(INFERNO.subarray(v * 4, v * 4 + 4), i * 4);
     }
     g.putImageData(img, 0, 0);
+    image.current = { canvas, lit, topDb };
+  }, [levels, p.view.dbRange]);
+
+  useEffect(() => {
+    const c = ref.current;
+    const im = image.current;
+    if (!c || !levels || !im) return;
+    const g = c.getContext("2d")!;
+    g.fillStyle = "#000000";
+    g.fillRect(0, 0, c.width, c.height);
+    // Until new levels arrive after a zoom or scroll, the last image is drawn where it now falls
+    // (and stretched vertically when only the top frequency changed on a linear scale).
+    const dx = xAt(levels.t0, p.width, p.view);
+    const dw = xAt(levels.t1, p.width, p.view) - dx;
+    let dy = 0;
+    let dh = height;
+    if (levels.scale === "linear" && p.view.scale === "linear" && levels.fMax !== p.view.fMax) {
+      dy = yAt(levels.fMax, height, p.view, fMin);
+      dh = height - dy;
+    }
+    g.drawImage(im.canvas, dx, dy, dw, dh);
     const sel = drag
       ? {
           t0: timeAt(Math.min(drag[0], drag[2]), p.width, p.view),
@@ -247,7 +336,15 @@ export function Spectrogram(p: LaneProps) {
     g.moveTo(px + 0.5, 0);
     g.lineTo(px + 0.5, height);
     g.stroke();
-    debug("spectrogram", { columns: p.width, rows: height, litCells: lit, topDb });
+    debug("spectrogram", {
+      columns: levels.columns,
+      rows: levels.rows,
+      litCells: im.lit,
+      topDb: im.topDb,
+      which: levels.which,
+      t0: levels.t0,
+      t1: levels.t1,
+    });
   }, [levels, p.view, p.playhead, p.width, drag]);
 
   const handlers = useDrag(
@@ -274,6 +371,10 @@ export function Spectrogram(p: LaneProps) {
         className="lane"
         data-testid="spectrogram"
         {...handlers}
+        onMouseLeave={() => {
+          handlers.onMouseLeave();
+          setHover("");
+        }}
         onMouseMove={(e) => {
           handlers.onMouseMove(e);
           const r = e.currentTarget.getBoundingClientRect();
@@ -282,16 +383,26 @@ export function Spectrogram(p: LaneProps) {
           const t = timeAt(x, p.width, p.view);
           const f = freqAt(y, height, p.view, fMin);
           let db = "";
-          if (levels) {
-            const v = levels[Math.floor(y) * p.width + Math.floor(x)];
-            if (v !== undefined) db = `${((v / 255) * 200 - 200).toFixed(1)} dB`;
+          // The level readout is only given when the drawn levels match the view exactly.
+          if (
+            levels &&
+            levels.t0 === p.view.t0 &&
+            levels.t1 === p.view.t1 &&
+            levels.fMax === p.view.fMax &&
+            levels.scale === p.view.scale
+          ) {
+            const v = levels.values[Math.floor(y) * levels.columns + Math.floor(x)];
+            if (v !== undefined) db = ` · ${((v / 255) * 200 - 200).toFixed(1)} dB`;
           }
-          setHover(`${t.toFixed(3)} s · ${f.toFixed(0)} Hz · ${db}`);
+          setHover(`${t.toFixed(3)} s · ${f.toFixed(0)} Hz${db}`);
         }}
       />
-      <div className="hover" data-testid="hover">
-        {hover}
-      </div>
+      {hover && (
+        <div className="hover" data-testid="hover">
+          {hover}
+        </div>
+      )}
+      <Busy on={pending} id="spectrogram-busy" />
     </div>
   );
 }

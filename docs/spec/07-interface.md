@@ -65,6 +65,9 @@ Space plays and pauses, Home returns to the start. *Stop* returns to where playb
 
 **Monitor.** *Original / Processed / Residual* switches what the lanes draw and what plays, for
 the whole stack. (Switching per step while previewing comes with previews in the interface, M1.)
+The first render of a stack can take seconds; each lane says *computing…* until its new data
+arrives, and meanwhile keeps the last image, placed where it now falls on the time axis. The
+level readout is shown only when the drawn data match the view exactly.
 
 **View state** — `t0`, `t1`, `scale`, `fMax`, `dbRange`, `vZoom`, `monitor`, `selection`,
 `tfSelection` — is written to the manifest 300 ms after it stops changing, and at once when
