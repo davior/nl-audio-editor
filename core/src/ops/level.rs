@@ -113,6 +113,20 @@ impl Op for Gain {
         0
     }
 
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let p: GainParams = typed(resolved)?;
+        let len = target.len();
+        Ok(Some(apply_scoped_gain(
+            target, 0, 0, len as i64, scope, len, p.gain_db,
+        )))
+    }
+
     fn render(
         &self,
         resolved: &Value,
@@ -183,6 +197,20 @@ impl Op for Normalise {
 
     fn radius(&self, _resolved: &Value, _sr: u32) -> usize {
         0
+    }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: NormaliseResolved = typed(resolved)?;
+        let len = target.len();
+        Ok(Some(apply_scoped_gain(
+            target, 0, 0, len as i64, scope, len, r.gain_db,
+        )))
     }
 
     fn render(
@@ -268,6 +296,27 @@ impl Op for DcRemove {
             Ok(r) if r.mode == "drift" => drift_half(r.window_ms, sr) as usize,
             _ => 0,
         }
+    }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        // Subtracting a mean (or a moving average) is linear: each component
+        // loses its own share, so apply it to the target's own values.
+        let mut params = resolved.clone();
+        if let Some(m) = params.as_object_mut() {
+            m.remove("offsets");
+        }
+        let own = self.resolve(&params, scope, target)?;
+        let len = target.len();
+        Ok(Some(
+            self.render(&own, scope, target, 0, 0, len as i64, len)?
+                .audio,
+        ))
     }
 
     fn render(

@@ -208,6 +208,7 @@ impl Op for NoiseReduce {
             },
             true,
             input,
+            None,
             offset,
             a,
             b,
@@ -229,5 +230,34 @@ impl Op for NoiseReduce {
             audio,
             measurements: m,
         })
+    }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: Resolved = typed(resolved)?;
+        let size = StftSize::new(r.fft_n);
+        let len = target.len();
+        let geom = Geometry::new(scope, size, target.sample_rate, len, true);
+        let (context, compute) = Self::reductions(&r, size, target.sample_rate);
+        let reductions = Reductions::Dynamic {
+            context,
+            compute: &compute,
+        };
+        let (audio, _) = mask::render(
+            &geom,
+            &reductions,
+            true,
+            target,
+            Some(decide),
+            0,
+            0,
+            len as i64,
+        );
+        Ok(Some(audio))
     }
 }

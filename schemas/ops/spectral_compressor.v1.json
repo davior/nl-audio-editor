@@ -8,9 +8,9 @@
   "scopes": ["clip", "time_range", "band", "tf_patch"],
   "params": [
     { "id": "mode", "title": "What counts as a high point", "type": "enum", "values": ["auto", "tonal", "transient", "level"], "default": "auto",
-      "help": "tonal: stands out from neighbouring frequencies (whines). transient: stands out from neighbouring moments (bangs). auto: either. level: louder than the band's typical level (a loud foreground voice)." },
-    { "id": "threshold_db", "title": "Threshold", "type": "number", "unit": "dB", "min": 0, "max": 48, "step": 0.5, "default": 6,
-      "help": "How far above the reference a point must rise before it is reduced." },
+      "help": "tonal: stands out from the median of neighbouring frequencies (whines). transient: stands out from the upper quartile of neighbouring moments (bangs). auto: either. level: rises far above the band's background (a loud foreground voice)." },
+    { "id": "threshold_db", "title": "Threshold", "type": "number", "unit": "dB", "min": 0, "max": 48, "step": 0.5, "default": "auto", "auto_allowed": true,
+      "help": "How far above the reference a point must rise before it is reduced. auto: 20 dB in level mode (the reference there is the band's background), 6 dB otherwise." },
     { "id": "ratio", "title": "Ratio", "type": "number", "min": 1, "max": 50, "step": 0.1, "default": 4 },
     { "id": "knee_db", "title": "Knee", "type": "number", "unit": "dB", "min": 0, "max": 24, "step": 0.5, "default": 6 },
     { "id": "max_reduction_db", "title": "Maximum reduction", "type": "number", "unit": "dB", "min": 0, "max": 60, "step": 0.5, "default": 20 },

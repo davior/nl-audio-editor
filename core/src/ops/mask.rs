@@ -290,12 +290,14 @@ pub fn levels(
     }
 }
 
-/// Render absolute output samples `[a, b)`.
+/// Render absolute output samples `[a, b)`. Levels (and so the mask) come from
+/// `decide` when given, otherwise from `input`; `decide` shares `input`'s offset.
 pub fn render(
     geom: &Geometry,
     reductions: &Reductions<'_>,
     linked: bool,
     input: &AudioBuffer,
+    decide: Option<&AudioBuffer>,
     offset: i64,
     a: i64,
     b: i64,
@@ -341,20 +343,11 @@ pub fn render(
             while c0 <= k_end {
                 let c1 = (c0 + chunk as i64 - 1).min(k_end);
                 let red: Vec<f32> = match reductions {
-                    Reductions::Static(per_bin) => {
-                        let mut r = vec![0.0f32; (c1 - c0 + 1) as usize * bins];
-                        for (fi, k) in (c0..=c1).enumerate() {
-                            for bb in 0..bins {
-                                r[fi * bins + bb] = per_bin[bb];
-                            }
-                            let _ = k;
-                        }
-                        r
-                    }
+                    Reductions::Static(per_bin) => per_bin.repeat((c1 - c0 + 1) as usize),
                     Reductions::Dynamic { context, compute } => {
                         let lv = levels(
                             size,
-                            input,
+                            decide.unwrap_or(input),
                             offset,
                             clip_len,
                             c0 - *context as i64,

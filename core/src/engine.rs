@@ -108,3 +108,31 @@ pub fn final_limiter(params: Option<&Value>) -> Result<RenderStep, OpError> {
         scope: Scope::Clip,
     })
 }
+
+/// Render each named component through `steps`, with every decision (mask,
+/// envelope, offset) taken from the mixture's own render at that point. The
+/// sum of the results equals the rendered mixture up to float rounding, and
+/// each result shows exactly what the stack did to that component.
+pub fn render_components(
+    mix: &AudioBuffer,
+    steps: &[RenderStep],
+    components: &std::collections::BTreeMap<String, AudioBuffer>,
+) -> Result<(AudioBuffer, std::collections::BTreeMap<String, AudioBuffer>), OpError> {
+    let len = mix.len();
+    let mut cur_mix = mix.clone();
+    let mut cur = components.clone();
+    for s in steps {
+        let op = s.op()?;
+        for (name, c) in cur.iter_mut() {
+            *c = op
+                .render_linear(&s.resolved, &s.scope, &cur_mix, c)?
+                .ok_or_else(|| {
+                    OpError::Invalid(format!("{} cannot render component `{name}`", s.op))
+                })?;
+        }
+        cur_mix = op
+            .render(&s.resolved, &s.scope, &cur_mix, 0, 0, len as i64, len)?
+            .audio;
+    }
+    Ok((cur_mix, cur))
+}

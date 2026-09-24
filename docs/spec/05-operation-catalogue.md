@@ -64,16 +64,16 @@ than `threshold_db`:
 | `mode` | Reference level | Catches |
 |---|---|---|
 | `tonal` | median of neighbouring frequencies at the same moment (±`tonal_width_hz`) | whines, tones, feedback |
-| `transient` | median of the same frequency over neighbouring moments (±`transient_width_ms`/2) | bangs, knocks, handling noise |
+| `transient` | upper quartile of the same frequency over neighbouring moments (±`transient_width_ms`/2) — a brief burst fills well under a quarter of its neighbourhood, speech fills most of it | bangs, knocks, handling noise |
 | `auto` (default) | the lower of the two | either |
-| `level` | median level of the band over ±`level_context_s` | a loud foreground voice, so quieter voices come up relative to it |
+| `level` | the band's background: the median cell per frame, then the median of that over ±`level_context_s` | a loud foreground voice, so quieter voices come up relative to it |
 
 **Parameters** (hard limits enforced in Rust):
 
 | Parameter | Range | Default |
 |---|---|---|
 | `mode` | `auto`, `tonal`, `transient`, `level` | `auto` |
-| `threshold_db` | 0–48 | 6 |
+| `threshold_db` | 0–48 | `auto`: 20 in `level` mode, 6 otherwise |
 | `ratio` | 1–50 | 4 |
 | `knee_db` | 0–24 | 6 |
 | `max_reduction_db` | 0–60 | 20 |

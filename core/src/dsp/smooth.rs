@@ -35,6 +35,21 @@ pub fn sliding_median(xs: &[f32], w: usize) -> Vec<f32> {
     out
 }
 
+/// Quantile `q` over `[i − w, i + w]` (clamped to the sequence) for every `i`.
+pub fn sliding_quantile(xs: &[f32], w: usize, q: f64) -> Vec<f32> {
+    let n = xs.len();
+    let mut out = Vec::with_capacity(n);
+    let mut buf = Vec::with_capacity(2 * w + 1);
+    for i in 0..n {
+        let a = i.saturating_sub(w);
+        let b = (i + w + 1).min(n);
+        buf.clear();
+        buf.extend_from_slice(&xs[a..b]);
+        out.push(quantile_in_place(&mut buf, q));
+    }
+    out
+}
+
 /// Envelope of reductions `g` (dB, ≤ 0): each reduction also acts on the
 /// `att` frames before it (look-ahead attack) and the `rel` frames after it
 /// (release), fading linearly in dB. The result is never less reduction than

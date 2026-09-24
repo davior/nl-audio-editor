@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod audio;
 pub mod dsp;
 pub mod engine;
+pub mod golden;
 pub mod hash;
 pub mod math;
 pub mod ops;

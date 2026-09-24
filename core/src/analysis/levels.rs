@@ -42,14 +42,11 @@ pub fn levels(audio: &AudioBuffer, a: usize, b: usize) -> Levels {
     }
 }
 
-/// Samples in flat-topped runs (≥ 3 equal consecutive samples at ≥ 90 % of the
-/// peak). Quiet recordings rarely reach full scale, so clipping is recognised
-/// by its shape rather than by a full-scale threshold.
-fn clipped(x: &[f32], peak: f64) -> u64 {
-    if peak <= 0.0 {
-        return 0;
-    }
-    let level = 0.9 * peak;
+/// Samples in flattened peaks: runs of ≥ 3 identical non-zero samples whose
+/// neighbours on both sides are smaller in magnitude. Recognises clipping at
+/// any level, including clipping that happened upstream (a codec or AGC) and
+/// was later attenuated, which a full-scale threshold would miss.
+fn clipped(x: &[f32], _peak: f64) -> u64 {
     let mut count = 0u64;
     let mut i = 0;
     while i < x.len() {
@@ -58,8 +55,20 @@ fn clipped(x: &[f32], peak: f64) -> u64 {
         while j < x.len() && x[j] == v {
             j += 1;
         }
-        if j - i >= 3 && (v as f64).abs() >= level {
-            count += (j - i) as u64;
+        if j - i >= 3 && v != 0.0 {
+            let before = if i > 0 {
+                x[i - 1].abs() < v.abs()
+            } else {
+                false
+            };
+            let after = if j < x.len() {
+                x[j].abs() < v.abs()
+            } else {
+                false
+            };
+            if before && after {
+                count += (j - i) as u64;
+            }
         }
         i = j;
     }
@@ -126,12 +135,19 @@ mod tests {
     }
 
     #[test]
-    fn flat_tops_count_as_clipping() {
+    fn flattened_peaks_count_as_clipping() {
         let mut x = vec![0.0f32; 100];
         for v in x.iter_mut().skip(10).take(5) {
-            *v = 0.3;
+            *v = 0.03;
         }
+        x[9] = 0.02;
+        x[15] = 0.01;
         x[50] = 0.29;
+        // A run of zeros (digital silence) and a plateau that is not a peak do not count.
+        for v in x.iter_mut().skip(60).take(4) {
+            *v = 0.05;
+        }
+        x[64] = 0.06;
         assert_eq!(clipped(&x, 0.3), 5);
     }
 }

@@ -33,7 +33,8 @@ pub struct QuietRegion {
     pub halves_diff_db: f64,
 }
 
-/// Frame energies (dB, RMS over 20 ms frames every 10 ms, averaged over channels).
+/// Frame energies (dB): AC RMS (each frame's mean removed, so a DC offset does
+/// not masquerade as noise) over 20 ms frames every 10 ms, averaged over channels.
 pub fn frame_energies(audio: &AudioBuffer, a: usize, b: usize) -> (Vec<f64>, usize, usize) {
     let sr = audio.sample_rate as f64;
     let frame = ((FRAME_S * sr).round() as usize).max(1);
@@ -43,9 +44,11 @@ pub fn frame_energies(audio: &AudioBuffer, a: usize, b: usize) -> (Vec<f64>, usi
     while s + frame <= b {
         let mut acc = 0.0;
         for ch in &audio.channels {
-            acc += ch[s..s + frame]
+            let x = &ch[s..s + frame];
+            let mean = x.iter().map(|&v| v as f64).sum::<f64>() / frame as f64;
+            acc += x
                 .iter()
-                .map(|&x| (x as f64) * (x as f64))
+                .map(|&v| (v as f64 - mean) * (v as f64 - mean))
                 .sum::<f64>();
         }
         out.push(power_to_db(acc / (frame * audio.num_channels()) as f64));

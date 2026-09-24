@@ -76,6 +76,21 @@ pub trait Op: Send + Sync {
         b: i64,
         clip_len: usize,
     ) -> Result<RenderOut, OpError>;
+
+    /// Render the whole clip of `target`, with every signal-dependent decision
+    /// (mask, envelope, offset) taken from `decide` instead. Once its decisions
+    /// are fixed, each operation is linear, so this measures exactly what a step
+    /// did to one known component of a mixture (the golden clips rely on it).
+    /// `None` if the operation cannot do this.
+    fn render_linear(
+        &self,
+        _resolved: &Value,
+        _scope: &Scope,
+        _decide: &AudioBuffer,
+        _target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        Ok(None)
+    }
 }
 
 /// Parse validated parameters or resolved values into an op's typed struct.

@@ -40,6 +40,8 @@ pub struct LineConfig {
     pub min_prominence_db: f64,
     pub min_persistence: f64,
     pub max_lines: usize,
+    /// Broader peaks (formant regions, resonances) are not lines.
+    pub max_width_hz: f64,
 }
 
 impl Default for LineConfig {
@@ -51,6 +53,7 @@ impl Default for LineConfig {
             min_prominence_db: 6.0,
             min_persistence: 0.5,
             max_lines: 16,
+            max_width_hz: 25.0,
         }
     }
 }
@@ -220,6 +223,9 @@ pub fn detect_in(spec: &LineSpectrum, audio: &AudioBuffer, cfg: &LineConfig) -> 
             right += 1;
         }
         let width = ((right - left + 1).max(2)) as f64 * bin_hz;
+        if width > cfg.max_width_hz {
+            continue;
+        }
         if lines
             .iter()
             .any(|x| (x.freq_hz - freq).abs() < (x.width_hz.max(width)).max(3.0 * bin_hz))

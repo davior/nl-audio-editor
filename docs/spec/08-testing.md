@@ -46,10 +46,19 @@ to 620 Hz and 2,450 Hz and leaves B's lines ≤ 3 dB; exact replay leaves them �
 recorded; the dataset export validates, with rejected and modified steps flagged and clone pairs
 linked, and without keys or audio unless requested.
 
-**Spectral compressor** (clip A): `tonal` takes the intermittent whine down ≥ 15 dB; `transient`
-takes the bangs down ≥ 10 dB; `level` takes the foreground down ≥ 6 dB relative to the background;
-in each, the background voice changes ≤ 2 dB. (Starting targets; tuned values are recorded here
-when they change.)
+**Spectral compressor** (clip A), measured per component:
+
+| Mode | Scope | Target | Measured (2026-09-24) |
+|---|---|---|---|
+| `tonal` (defaults) | 9.5–14.5 s × 4.5–6 kHz | whine ≥ 15 dB down; background ≤ 2 dB | whine −17.4 dB; background −0.0 dB |
+| `transient` (defaults) | whole clip | bangs ≥ 10 dB down; background ≤ 2 dB | bangs −12.0 dB; background −0.5 dB; foreground −0.9 dB |
+| `level` (ratio 8, attack 5 ms, release 50 ms) | 200–4000 Hz | foreground ≥ **5** dB down relative to background; background ≤ 2 dB | foreground −7.2 dB; background −1.8 dB; relative −5.4 dB |
+
+The `level` target was 6 dB. The two synthetic voices overlap in time–frequency (moving pitch
+smears their partials across cells), which caps what per-cell processing can separate at about
+5.5 dB on this material; the target is recorded at 5 dB. Tuning that produced these defaults:
+the `transient` reference moved from the median to the upper quartile (speech onsets were
+being treated as transients), and `threshold_db` gained a mode-dependent `auto` default.
 
 ## Proposed: control replay (M3)
 

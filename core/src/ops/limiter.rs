@@ -62,57 +62,83 @@ impl Op for Limiter {
         b: i64,
         clip_len: usize,
     ) -> Result<RenderOut, OpError> {
-        let p: Params = typed(resolved)?;
-        let (att, rel) = spans(&p, input.sample_rate);
-        let ceiling = db_to_amp(p.ceiling_dbfs);
-        let n = (b - a) as usize;
-        let mut env = vec![0.0f64; n];
-        // Peaks that can influence [a, b).
-        let lo = (a - rel).max(offset).max(0);
-        let hi = (b + att)
-            .min(offset + input.len() as i64)
-            .min(clip_len as i64);
-        for pk in lo..hi {
-            let j = (pk - offset) as usize;
-            let level = input
-                .channels
-                .iter()
-                .fold(0.0f64, |m, c| m.max((c[j] as f64).abs()));
-            if level <= ceiling {
-                continue;
-            }
-            let red = p.ceiling_dbfs - amp_to_db(level);
-            let from = (pk - att).max(a);
-            let to = (pk + rel).min(b - 1);
-            for i in from..=to {
-                let (d, side) = if i < pk { (pk - i, att) } else { (i - pk, rel) };
-                let v = red * (1.0 - d as f64 / (side + 1) as f64);
-                let e = &mut env[(i - a) as usize];
-                if v < *e {
-                    *e = v;
-                }
-            }
-        }
-        let mut out = copy_window(input, offset, a, b);
-        let mut limited = 0u64;
-        for (j, &e) in env.iter().enumerate() {
-            if e < 0.0 {
-                limited += 1;
-                let g = db_to_amp(e);
-                for ch in out.channels.iter_mut() {
-                    ch[j] = (ch[j] as f64 * g) as f32;
-                }
-            }
-        }
-        let mut m = Map::new();
-        m.insert(
-            "max_reduction_db".into(),
-            json!(round_to(env.iter().fold(0.0f64, |x, &y| x.min(y)), 2)),
-        );
-        m.insert("samples_limited".into(), json!(limited));
-        Ok(RenderOut {
-            audio: out,
-            measurements: m,
-        })
+        limit(resolved, input, input, offset, a, b, clip_len)
     }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        _scope: &Scope,
+        decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let len = target.len();
+        Ok(Some(
+            limit(resolved, decide, target, 0, 0, len as i64, len)?.audio,
+        ))
+    }
+}
+
+/// Gain envelope decided from `input`, applied to `target` (normally the same).
+fn limit(
+    resolved: &Value,
+    input: &AudioBuffer,
+    target: &AudioBuffer,
+    offset: i64,
+    a: i64,
+    b: i64,
+    clip_len: usize,
+) -> Result<RenderOut, OpError> {
+    let p: Params = typed(resolved)?;
+    let (att, rel) = spans(&p, input.sample_rate);
+    let ceiling = db_to_amp(p.ceiling_dbfs);
+    let n = (b - a) as usize;
+    let mut env = vec![0.0f64; n];
+    // Peaks that can influence [a, b).
+    let lo = (a - rel).max(offset).max(0);
+    let hi = (b + att)
+        .min(offset + input.len() as i64)
+        .min(clip_len as i64);
+    for pk in lo..hi {
+        let j = (pk - offset) as usize;
+        let level = input
+            .channels
+            .iter()
+            .fold(0.0f64, |m, c| m.max((c[j] as f64).abs()));
+        if level <= ceiling {
+            continue;
+        }
+        let red = p.ceiling_dbfs - amp_to_db(level);
+        let from = (pk - att).max(a);
+        let to = (pk + rel).min(b - 1);
+        for i in from..=to {
+            let (d, side) = if i < pk { (pk - i, att) } else { (i - pk, rel) };
+            let v = red * (1.0 - d as f64 / (side + 1) as f64);
+            let e = &mut env[(i - a) as usize];
+            if v < *e {
+                *e = v;
+            }
+        }
+    }
+    let mut out = copy_window(target, offset, a, b);
+    let mut limited = 0u64;
+    for (j, &e) in env.iter().enumerate() {
+        if e < 0.0 {
+            limited += 1;
+            let g = db_to_amp(e);
+            for ch in out.channels.iter_mut() {
+                ch[j] = (ch[j] as f64 * g) as f32;
+            }
+        }
+    }
+    let mut m = Map::new();
+    m.insert(
+        "max_reduction_db".into(),
+        json!(round_to(env.iter().fold(0.0f64, |x, &y| x.min(y)), 2)),
+    );
+    m.insert("samples_limited".into(), json!(limited));
+    Ok(RenderOut {
+        audio: out,
+        measurements: m,
+    })
 }

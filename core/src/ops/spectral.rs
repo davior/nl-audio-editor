@@ -8,7 +8,9 @@ use super::mask::{self, Geometry, Levels, Reductions};
 use super::{typed, with, Descriptor, Op, OpError, RenderOut};
 use crate::analysis::tonal::{self, LineConfig, LineSpectrum};
 use crate::audio::AudioBuffer;
-use crate::dsp::smooth::{attack_release, median_in_place, min_then_mean};
+use crate::dsp::smooth::{
+    attack_release, min_then_mean, quantile_in_place, sliding_median, sliding_quantile,
+};
 use crate::dsp::stft::StftSize;
 use crate::math::{cos, round_to, PI};
 use crate::scope::Scope;
@@ -173,6 +175,32 @@ impl Op for LineReduce {
             .unwrap_or(0)
     }
 
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        // A static mask decides nothing from the signal.
+        let r: LineResolved = typed(resolved)?;
+        let size = StftSize::new(r.fft_n);
+        let red = line_mask(&r.resolved_lines, r.width_factor, size, target.sample_rate);
+        let len = target.len();
+        let geom = Geometry::new(scope, size, target.sample_rate, len, false);
+        let (audio, _) = mask::render(
+            &geom,
+            &Reductions::Static(&red),
+            true,
+            target,
+            None,
+            0,
+            0,
+            len as i64,
+        );
+        Ok(Some(audio))
+    }
+
     fn render(
         &self,
         resolved: &Value,
@@ -188,7 +216,16 @@ impl Op for LineReduce {
         let sr = input.sample_rate;
         let red = line_mask(&r.resolved_lines, r.width_factor, size, sr);
         let geom = Geometry::new(scope, size, sr, clip_len, false);
-        let (audio, st) = mask::render(&geom, &Reductions::Static(&red), true, input, offset, a, b);
+        let (audio, st) = mask::render(
+            &geom,
+            &Reductions::Static(&red),
+            true,
+            input,
+            None,
+            offset,
+            a,
+            b,
+        );
         let mut m = Map::new();
         m.insert(
             "lines_reduced".into(),
@@ -287,6 +324,37 @@ impl Op for BandCut {
             .unwrap_or(0)
     }
 
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: BandResolved = typed(resolved)?;
+        let size = StftSize::new(r.fft_n);
+        let bin_hz = size.bin_hz(target.sample_rate);
+        let red: Vec<f32> = (0..size.bins())
+            .map(|bb| {
+                (-r.depth_db * band_shape(bb as f64 * bin_hz, r.f_lo, r.f_hi, r.edge_hz_resolved))
+                    as f32
+            })
+            .collect();
+        let len = target.len();
+        let geom = Geometry::new(scope, size, target.sample_rate, len, false);
+        let (audio, _) = mask::render(
+            &geom,
+            &Reductions::Static(&red),
+            true,
+            target,
+            None,
+            0,
+            0,
+            len as i64,
+        );
+        Ok(Some(audio))
+    }
+
     fn render(
         &self,
         resolved: &Value,
@@ -308,7 +376,16 @@ impl Op for BandCut {
             })
             .collect();
         let geom = Geometry::new(scope, size, sr, clip_len, false);
-        let (audio, st) = mask::render(&geom, &Reductions::Static(&red), true, input, offset, a, b);
+        let (audio, st) = mask::render(
+            &geom,
+            &Reductions::Static(&red),
+            true,
+            input,
+            None,
+            offset,
+            a,
+            b,
+        );
         // Band level before/after from the long-term spectrum of the window.
         let level = |buf: &AudioBuffer| {
             let sp = LineSpectrum::compute(buf, 0, buf.len());
@@ -351,7 +428,7 @@ pub struct SpectralCompressor {
 #[allow(dead_code)] // parsed to check the parameter set; resolved values are read via ScResolved
 struct ScParams {
     mode: String,
-    threshold_db: f64,
+    threshold_db: Value,
     ratio: f64,
     knee_db: f64,
     max_reduction_db: f64,
@@ -411,9 +488,20 @@ impl ScResolved {
     }
 }
 
-/// Sliding median with a sorted window (O(w) per step).
-fn sliding_median(xs: &[f32], w: usize) -> Vec<f32> {
-    crate::dsp::smooth::sliding_median(xs, w)
+/// Reference quantile over neighbouring moments in `transient` mode. A brief
+/// burst fills well under a quarter of its neighbourhood; sustained sound such
+/// as speech fills most of it, so it is not mistaken for a transient.
+pub const TRANSIENT_QUANTILE: f64 = 0.75;
+
+/// Threshold used when `threshold_db` is `auto`: in `level` mode the reference
+/// is the band's background, and 20 dB above it leaves a quieter voice mostly
+/// untouched; elsewhere 6 dB above the neighbourhood.
+pub fn auto_threshold_db(mode: &str) -> f64 {
+    if mode == "level" {
+        20.0
+    } else {
+        6.0
+    }
 }
 
 impl SpectralCompressor {
@@ -443,17 +531,19 @@ impl SpectralCompressor {
             let level_of = |k: i64, b: usize| lv.at(k, b);
             match r.mode.as_str() {
                 "level" => {
-                    // Median of the band per frame, then a sliding median over ±wl frames.
+                    // The band's background: the median cell per frame (robust to a
+                    // few loud partials or a steady line), then the median of that
+                    // over ±wl frames. The loud layer is what rises far above it.
                     let per_frame: Vec<f32> = frames_all
                         .iter()
                         .map(|&k| {
                             let mut v: Vec<f32> = (b_lo..=b_hi).map(|b| level_of(k, b)).collect();
-                            median_in_place(&mut v)
+                            quantile_in_place(&mut v, 0.5)
                         })
                         .collect();
-                    let med = sliding_median(&per_frame, sh.wl);
+                    let background = sliding_median(&per_frame, sh.wl);
                     for (si, k) in (lo..=hi).enumerate() {
-                        let m = med[(k - lv.k0) as usize];
+                        let m = background[(k - lv.k0) as usize];
                         for bi in 0..nb {
                             reference[si * nb + bi] = m;
                         }
@@ -477,7 +567,7 @@ impl SpectralCompressor {
                         for bi in 0..nb {
                             let col: Vec<f32> =
                                 frames_all.iter().map(|&k| level_of(k, b_lo + bi)).collect();
-                            let med = sliding_median(&col, sh.wt);
+                            let med = sliding_quantile(&col, sh.wt, TRANSIENT_QUANTILE);
                             for (si, k) in (lo..=hi).enumerate() {
                                 rt[si * nb + bi] = med[(k - lv.k0) as usize];
                             }
@@ -537,7 +627,14 @@ impl Op for SpectralCompressor {
     ) -> Result<Value, OpError> {
         let p: ScParams = typed(params)?;
         let n = StftSize::scaled(resolution_n(&p.resolution, &p.mode), input.sample_rate).n;
-        Ok(with(params, json!({ "fft_n": n })))
+        let threshold = p
+            .threshold_db
+            .as_f64()
+            .unwrap_or_else(|| auto_threshold_db(&p.mode));
+        Ok(with(
+            params,
+            json!({ "fft_n": n, "threshold_db": threshold }),
+        ))
     }
 
     fn radius(&self, resolved: &Value, sr: u32) -> usize {
@@ -547,6 +644,36 @@ impl Op for SpectralCompressor {
         let size = StftSize::new(r.fft_n);
         let sh = r.shape(size, sr);
         mask::radius(size, sh.att + sh.rel + sh.wt.max(sh.wl))
+    }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: ScResolved = typed(resolved)?;
+        let size = StftSize::new(r.fft_n);
+        let sr = target.sample_rate;
+        let len = target.len();
+        let geom = Geometry::new(scope, size, sr, len, true);
+        let (context, compute) = Self::compute(&r, &geom, sr);
+        let reductions = Reductions::Dynamic {
+            context,
+            compute: &compute,
+        };
+        let (audio, _) = mask::render(
+            &geom,
+            &reductions,
+            r.link_channels,
+            target,
+            Some(decide),
+            0,
+            0,
+            len as i64,
+        );
+        Ok(Some(audio))
     }
 
     fn render(
@@ -572,6 +699,7 @@ impl Op for SpectralCompressor {
             },
             r.link_channels,
             input,
+            None,
             offset,
             a,
             b,

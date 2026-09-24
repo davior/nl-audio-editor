@@ -77,10 +77,12 @@ pub(crate) fn knee_curve(over: f64, ratio: f64, knee: f64) -> f64 {
     }
 }
 
+/// Envelope decided from `input`, applied to `target` (normally the same buffer).
 fn render_with(
     r: &Resolved,
     scope: &Scope,
     input: &AudioBuffer,
+    target: &AudioBuffer,
     offset: i64,
     a: i64,
     b: i64,
@@ -119,7 +121,7 @@ fn render_with(
     let at = |c: i64| env[(c - c_lo) as usize] as f64;
     let (s0, s1) = scope.samples(sr, clip_len);
     let ramp_len = (SCOPE_RAMP_S * sr as f64).round() as i64;
-    let mut out = copy_window(input, offset, a, b);
+    let mut out = copy_window(target, offset, a, b);
     for ch in out.channels.iter_mut() {
         for (j, x) in ch.iter_mut().enumerate() {
             let i = a + j as i64;
@@ -159,7 +161,16 @@ impl Op for Compressor {
         let mut probe = params.clone();
         probe["makeup_db"] = json!(0.0);
         let r: Resolved = typed(&probe)?;
-        let (out, _) = render_with(&r, scope, input, 0, 0, input.len() as i64, input.len());
+        let (out, _) = render_with(
+            &r,
+            scope,
+            input,
+            input,
+            0,
+            0,
+            input.len() as i64,
+            input.len(),
+        );
         let peak = |b: &AudioBuffer| {
             b.channels
                 .iter()
@@ -183,6 +194,20 @@ impl Op for Compressor {
         (g.win / 2 + (g.att + g.rel + 2) as i64 * g.hop) as usize
     }
 
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: Resolved = typed(resolved)?;
+        let len = target.len();
+        Ok(Some(
+            render_with(&r, scope, decide, target, 0, 0, len as i64, len).0,
+        ))
+    }
+
     fn render(
         &self,
         resolved: &Value,
@@ -194,7 +219,7 @@ impl Op for Compressor {
         clip_len: usize,
     ) -> Result<RenderOut, OpError> {
         let r: Resolved = typed(resolved)?;
-        let (audio, env) = render_with(&r, scope, input, offset, a, b, clip_len);
+        let (audio, env) = render_with(&r, scope, input, input, offset, a, b, clip_len);
         let active: Vec<f64> = env
             .iter()
             .filter(|&&v| v < 0.0)
