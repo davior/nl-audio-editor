@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/dataset/episode-record.schema.json",
+  "title": "Dataset episode record",
+  "description": "One line of episodes.jsonl: a project's final stack, ratings and lineage, with links to comparable clones.",
+  "type": "object",
+  "required": ["record", "record_version", "project", "stack", "stack_hash", "ratings", "counts", "comparisons"],
+  "properties": {
+    "record": { "const": "episode" },
+    "record_version": { "const": 1 },
+    "project": { "type": "object", "required": ["id", "name", "source_sha256"] },
+    "stack": { "type": "array", "items": { "type": "object", "required": ["step_id", "op", "op_version", "params", "resolved", "scope"] } },
+    "stack_hash": { "type": "string" },
+    "ratings": { "type": "array" },
+    "comparisons": { "type": "array", "items": { "type": "object", "required": ["with", "relation"],
+      "properties": { "relation": { "enum": ["sibling", "parent", "child"] } } } }
+  }
+}

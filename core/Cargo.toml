@@ -1,0 +1,26 @@
+[package]
+name = "nlae-core"
+description = "DSP, analysis, operation registry, action stack and provenance for nlae"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2 = "0.11"
+hex = "0.4"
+libm = "0.2"
+ryu-js = "1"
+crc32fast = "1"
+symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "mp3", "flac"] }
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl"] }
+
+[features]
+# Generates the TypeScript types in shared/types (see `cargo test --features ts`).
+ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+boon = "0.6"

@@ -1,0 +1,13 @@
+/target
+node_modules/
+/frontend/dist/
+/frontend/src/core-wasm/
+/frontend/test-results/
+/frontend/playwright-report/
+/wasm/pkg/
+/tests/golden/out/
+/tests/golden/real/
+*.nlae
+.DS_Store
+/frontend/tests/e2e/.fixtures/
+*.tsbuildinfo

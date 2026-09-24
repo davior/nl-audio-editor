@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/dataset/manifest.schema.json",
+  "title": "Dataset manifest",
+  "type": "object",
+  "required": ["format", "format_version", "record_version", "created", "app", "features_version", "registry", "options", "projects", "counts", "files"],
+  "properties": {
+    "format": { "const": "nlae-dataset" },
+    "format_version": { "const": 1 },
+    "files": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+  }
+}

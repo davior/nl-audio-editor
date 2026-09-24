@@ -1,0 +1,27 @@
+{
+  "id": "band_cut",
+  "version": 1,
+  "title": "Band cut",
+  "summary": "Cut the level between two frequencies by a fixed amount, with soft edges. Static and zero-phase.",
+  "category": "filters_eq",
+  "class": "attenuative",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "f_lo", "title": "From", "type": "number", "unit": "Hz", "min": 1, "max": 96000, "step": 1, "required": true },
+    { "id": "f_hi", "title": "To", "type": "number", "unit": "Hz", "min": 1, "max": 96000, "step": 1, "required": true },
+    { "id": "depth_db", "title": "Cut", "type": "number", "unit": "dB", "min": 0, "max": 60, "step": 0.5, "default": 12 },
+    { "id": "edge_hz", "title": "Edge softness", "type": "number", "unit": "Hz", "min": 0, "max": 500, "step": 1, "default": "auto", "auto_allowed": true,
+      "help": "Width of the transition at each edge, centred on it. auto = two analysis bins." }
+  ],
+  "identity": [{ "depth_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" },
+    { "id": "band_level_before_db", "title": "Band level before", "unit": "dB" },
+    { "id": "band_level_after_db", "title": "Band level after", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "f_lo", "feature": "tonal_lines", "note": "A narrow cut around a detected line binds to that line." },
+    { "param": "depth_db", "feature": "tonal_lines.prominence_db", "note": "The depth binds to the line's prominence as an offset." }
+  ]
+}

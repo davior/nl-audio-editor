@@ -1,0 +1,23 @@
+# Cross-target determinism: native and WASM renders must be bit-identical.
+# Transcendental functions from the platform maths library differ in the last
+# bit between targets, so the core routes them through `libm` (see core/src/math.rs).
+disallowed-methods = [
+  { path = "f64::powf", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::powi", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::exp", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::ln", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::log10", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::log2", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::sin", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::cos", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::tan", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::mul_add", reason = "fused multiply-add changes rounding; keep arithmetic explicit" },
+  { path = "f32::powf", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::powi", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::exp", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::ln", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::log10", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::sin", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::cos", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f32::mul_add", reason = "fused multiply-add changes rounding; keep arithmetic explicit" },
+]

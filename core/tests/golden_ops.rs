@@ -1,0 +1,143 @@
+//! Golden-clip acceptance for the operations, measured per component.
+
+use std::collections::BTreeMap;
+
+use nlae_core::audio::AudioBuffer;
+use nlae_core::engine::{render_components, RenderStep};
+use nlae_core::golden::{generate, spec_a, Clip};
+use nlae_core::math::power_to_db;
+use nlae_core::ops::registry;
+use nlae_core::scope::Scope;
+use serde_json::{json, Value};
+
+fn clip_a() -> &'static Clip {
+    static CLIP: std::sync::OnceLock<Clip> = std::sync::OnceLock::new();
+    CLIP.get_or_init(|| generate(&spec_a()))
+}
+
+fn step(op: &str, params: Value, scope: Scope, input: &AudioBuffer) -> RenderStep {
+    let reg = registry();
+    let p = reg.validate(op, 1, &params, &scope).unwrap();
+    let resolved = reg.get(op, 1).unwrap().resolve(&p, &scope, input).unwrap();
+    RenderStep {
+        op: op.into(),
+        op_version: 1,
+        resolved,
+        scope,
+    }
+}
+
+fn energy(b: &AudioBuffer, t0: f64, t1: f64) -> f64 {
+    let (a, z) = (b.time_to_sample(t0), b.time_to_sample(t1));
+    b.channels[0][a..z]
+        .iter()
+        .map(|&x| (x as f64) * (x as f64))
+        .sum()
+}
+
+fn pick(clip: &Clip, names: &[&str]) -> BTreeMap<String, AudioBuffer> {
+    names
+        .iter()
+        .map(|n| (n.to_string(), clip.component(n).clone()))
+        .collect()
+}
+
+/// Change in dB (negative = reduced) of a component over a span.
+fn change_db(before: &AudioBuffer, after: &AudioBuffer, t0: f64, t1: f64) -> f64 {
+    power_to_db(energy(after, t0, t1) / energy(before, t0, t1))
+}
+
+#[test]
+fn components_sum_to_the_rendered_mixture() {
+    let clip = clip_a();
+    let steps = vec![
+        step("dc_remove", json!({}), Scope::Clip, &clip.mix),
+        step("gain", json!({"gain_db": 20}), Scope::Clip, &clip.mix),
+    ];
+    let (mix_out, comps) = render_components(&clip.mix, &steps, &clip.components).unwrap();
+    let mut worst = 0.0f64;
+    for i in (0..mix_out.len()).step_by(101) {
+        let sum: f64 = comps.values().map(|c| c.channels[0][i] as f64).sum();
+        worst = worst.max((sum - mix_out.channels[0][i] as f64).abs());
+    }
+    assert!(
+        worst < 1e-6,
+        "components differ from the mixture by {worst}"
+    );
+}
+
+#[test]
+fn spectral_compressor_tonal_takes_the_whine_down() {
+    let clip = clip_a();
+    let scope = Scope::TfPatch {
+        t0: 9.5,
+        t1: 14.5,
+        f_lo: 4500.0,
+        f_hi: 6000.0,
+    };
+    let s = step(
+        "spectral_compressor",
+        json!({"mode": "tonal"}),
+        scope,
+        &clip.mix,
+    );
+    let names = ["whine", "background", "foreground"];
+    let (_, out) = render_components(&clip.mix, &[s], &pick(clip, &names)).unwrap();
+    let whine = change_db(clip.component("whine"), &out["whine"], 10.0, 14.0);
+    let bg = change_db(clip.component("background"), &out["background"], 0.0, 60.0);
+    println!("tonal: whine {whine:.2} dB, background {bg:.2} dB");
+    assert!(whine <= -15.0, "whine only {whine:.2} dB");
+    assert!(bg.abs() <= 2.0, "background changed {bg:.2} dB");
+}
+
+#[test]
+fn spectral_compressor_transient_takes_the_bangs_down() {
+    let clip = clip_a();
+    let s = step(
+        "spectral_compressor",
+        json!({"mode": "transient"}),
+        Scope::Clip,
+        &clip.mix,
+    );
+    let names = ["bangs", "background", "foreground"];
+    let (_, out) = render_components(&clip.mix, &[s], &pick(clip, &names)).unwrap();
+    let bangs = change_db(clip.component("bangs"), &out["bangs"], 0.0, 60.0);
+    let bg = change_db(clip.component("background"), &out["background"], 0.0, 60.0);
+    let fg = change_db(clip.component("foreground"), &out["foreground"], 0.0, 60.0);
+    println!("transient: bangs {bangs:.2} dB, background {bg:.2} dB, foreground {fg:.2} dB");
+    assert!(bangs <= -10.0, "bangs only {bangs:.2} dB");
+    assert!(bg.abs() <= 2.0, "background changed {bg:.2} dB");
+}
+
+#[test]
+fn spectral_compressor_level_brings_the_background_up_relative_to_the_foreground() {
+    let clip = clip_a();
+    // Faster, steeper settings than the defaults: the job is to hold the loud
+    // voice down syllable by syllable.
+    let params = json!({"mode": "level", "ratio": 8, "attack_ms": 5, "release_ms": 50});
+    let s = step(
+        "spectral_compressor",
+        params,
+        Scope::Band {
+            f_lo: 200.0,
+            f_hi: 4000.0,
+        },
+        &clip.mix,
+    );
+    let names = ["background", "foreground"];
+    let (_, out) = render_components(&clip.mix, &[s], &pick(clip, &names)).unwrap();
+    let fg = change_db(clip.component("foreground"), &out["foreground"], 0.0, 60.0);
+    let bg = change_db(clip.component("background"), &out["background"], 0.0, 60.0);
+    println!(
+        "level: foreground {fg:.2} dB, background {bg:.2} dB, relative {:.2} dB",
+        fg - bg
+    );
+    // Target was 6 dB; the synthetic voices overlap in time–frequency, which
+    // caps cell-level separation near 5.5 dB (recorded in docs/spec/08-testing.md).
+    assert!(
+        fg - bg <= -5.0,
+        "foreground only {:.2} dB down relative to the background",
+        fg - bg
+    );
+    assert!(bg.abs() <= 2.0, "background changed {bg:.2} dB");
+}

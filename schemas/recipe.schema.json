@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/recipe.schema.json",
+  "title": "Recipe",
+  "description": "A saved stack (or part of one) to replay on other clips, exactly or adaptively.",
+  "type": "object",
+  "required": ["format", "format_version", "name", "features_version", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "nlae-recipe" },
+    "format_version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "created_from": {
+      "type": "object", "required": ["project", "source_sha256", "stack_hash", "steps"],
+      "properties": {
+        "project": { "type": "string" },
+        "source_sha256": { "$ref": "step.schema.json#/$defs/hash" },
+        "stack_hash": { "type": "string" },
+        "steps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "features_version": { "type": "integer" },
+    "steps": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["op", "op_version", "params"],
+        "additionalProperties": false,
+        "properties": {
+          "op": { "type": "string" },
+          "op_version": { "type": "integer", "minimum": 1 },
+          "params": { "type": "object" },
+          "resolved": { "type": "object" },
+          "scope": { "$ref": "step.schema.json#/$defs/scope" },
+          "bindings": { "type": "object", "additionalProperties": { "$ref": "step.schema.json#/$defs/binding" } },
+          "optional": { "type": "boolean" },
+          "enabled": { "type": "boolean" },
+          "title": { "type": "string" },
+          "intent": { "type": "string" },
+          "rationale": { "type": "string" }
+        }
+      }
+    }
+  }
+}

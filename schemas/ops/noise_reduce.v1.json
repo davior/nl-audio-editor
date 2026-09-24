@@ -1,0 +1,29 @@
+{
+  "id": "noise_reduce",
+  "version": 1,
+  "title": "Noise reduction",
+  "summary": "Learn the noise from a quiet part of the clip and reduce everything that is no louder than that noise, across the whole scope. Only ever reduces.",
+  "category": "noise_restoration",
+  "class": "attenuative",
+  "scopes": ["clip", "time_range", "band", "tf_patch"],
+  "params": [
+    { "id": "profile", "title": "Noise profile", "type": "time_range", "default": "auto",
+      "help": "auto: the quietest steady region (the shortest sample that works). Or a time range {t0, t1}." },
+    { "id": "reduction_db", "title": "Noise reduction", "type": "number", "unit": "dB", "min": 0, "max": 48, "step": 0.5, "default": 12 },
+    { "id": "sensitivity_db", "title": "Sensitivity", "type": "number", "unit": "dB", "min": 0, "max": 24, "step": 0.5, "default": 6,
+      "help": "How far above the noise profile a sound must be to be kept." },
+    { "id": "frequency_smoothing_bands", "title": "Frequency smoothing", "type": "integer", "min": 0, "max": 12, "default": 3 },
+    { "id": "attack_ms", "title": "Attack (look-ahead)", "type": "number", "unit": "ms", "min": 0, "max": 500, "step": 1, "default": 20 },
+    { "id": "release_ms", "title": "Release", "type": "number", "unit": "ms", "min": 0, "max": 2000, "step": 1, "default": 100 }
+  ],
+  "identity": [{ "reduction_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "cells_reduced_pct", "title": "Time–frequency cells reduced", "unit": "%" },
+    { "id": "mean_reduction_db", "title": "Mean reduction where reduced", "unit": "dB" },
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "profile", "feature": "quietest_region", "note": "A profile taken from a quiet part of the clip binds to the quietest steady region." }
+  ]
+}

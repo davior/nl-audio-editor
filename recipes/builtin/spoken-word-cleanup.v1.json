@@ -1,0 +1,89 @@
+{
+  "format": "nlae-recipe",
+  "format_version": 1,
+  "name": "spoken-word-cleanup",
+  "title": "Spoken-word clean-up",
+  "description": "The reference workflow (docs/spec/reference-workflows/audacity-spoken-word-cleanup.md), automated and adaptive: remove the DC offset, reduce noise using the quietest steady region as the profile, flatten every persistent tonal line until none stands out, bring the peak to -1 dBFS, and optionally compress. Every value is measured on the clip it is replayed on.",
+  "features_version": 1,
+  "steps": [
+    {
+      "op": "dc_remove",
+      "op_version": 1,
+      "params": {
+        "mode": "mean",
+        "window_ms": 1000
+      },
+      "scope": {
+        "kind": "clip"
+      },
+      "title": "Remove the DC offset",
+      "rationale": "Audacity step 3: remove the DC offset first, so every later measurement is centred."
+    },
+    {
+      "op": "noise_reduce",
+      "op_version": 1,
+      "params": {
+        "profile": "auto",
+        "reduction_db": 12,
+        "sensitivity_db": 6,
+        "frequency_smoothing_bands": 3,
+        "attack_ms": 20,
+        "release_ms": 100
+      },
+      "scope": {
+        "kind": "clip"
+      },
+      "title": "Reduce noise (profile from the quietest steady region)",
+      "rationale": "Audacity step 4: the quietest part of the clip, using the shortest sample that works, applied across the whole clip."
+    },
+    {
+      "op": "line_reduce",
+      "op_version": 1,
+      "params": {
+        "lines": "auto",
+        "min_prominence_db": 6,
+        "min_persistence": 0.5,
+        "max_lines": 16,
+        "target_excess_db": 0,
+        "max_depth_db": 40,
+        "width_factor": 1
+      },
+      "scope": {
+        "kind": "clip"
+      },
+      "title": "Flatten the tonal lines",
+      "rationale": "Audacity steps 5-6: find every line running through the clip and cut each until it matches the surrounding material; repeat until no peak stands out."
+    },
+    {
+      "op": "normalise",
+      "op_version": 1,
+      "params": {
+        "target_peak_dbfs": -1
+      },
+      "scope": {
+        "kind": "clip"
+      },
+      "title": "Bring the peak to -1 dBFS",
+      "rationale": "Audacity steps 2-3: the +30 dB amplify and the normalise become one gain measured on the clip. It runs after the reductions, which move the peak by hundredths of a dB, so the -1 dBFS target is exact at the end and the final limiter has nothing to do. (In Audacity the level comes first so the waveform is visible; here the view zooms instead.)"
+    },
+    {
+      "op": "compressor",
+      "op_version": 1,
+      "params": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "knee_db": 6,
+        "attack_ms": 10,
+        "release_ms": 150,
+        "makeup_db": "auto"
+      },
+      "scope": {
+        "kind": "clip"
+      },
+      "optional": true,
+      "enabled": false,
+      "title": "Compress (optional)",
+      "rationale": "Audacity step 7, optional."
+    }
+  ]
+}

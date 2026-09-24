@@ -1,0 +1,22 @@
+{
+  "id": "gain",
+  "version": 1,
+  "title": "Gain",
+  "summary": "Raise or lower the level by a fixed amount. A time-range gain fades in and out over 5 ms at its edges.",
+  "category": "gain_level",
+  "class": "corrective",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "gain_db", "title": "Gain", "type": "number", "unit": "dB", "min": -60, "max": 60, "step": 0.1, "default": 0,
+      "help": "Positive values make it louder, negative quieter." }
+  ],
+  "identity": [{ "gain_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "peak_before_dbfs", "title": "Peak before", "unit": "dBFS" },
+    { "id": "peak_after_dbfs", "title": "Peak after", "unit": "dBFS" }
+  ],
+  "binding_hints": [
+    { "param": "gain_db", "feature": "peak_dbfs", "note": "A fixed gain usually means 'bring the peak to about X'; re-derived as target peak minus the new clip's peak." }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/step.schema.json",
+  "title": "Step",
+  "description": "One recorded action, identical in shape whatever produced it (console, panel, command line, recipe, automation); only actor and origin differ.",
+  "type": "object",
+  "required": ["step_id", "op", "op_version", "params", "resolved", "scope", "bindings", "actor", "origin", "class", "label", "measurements", "input_hash"],
+  "properties": {
+    "step_id": { "type": "string", "minLength": 1 },
+    "plan_id": { "type": "string" },
+    "op": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "op_version": { "type": "integer", "minimum": 1 },
+    "params": { "type": "object", "description": "As given, every parameter written out; may contain \"auto\"." },
+    "resolved": { "type": "object", "description": "The concrete values used on this clip: the exact form." },
+    "scope": { "$ref": "#/$defs/scope" },
+    "bindings": { "type": "object", "additionalProperties": { "$ref": "#/$defs/binding" }, "description": "The adaptive form." },
+    "actor": { "$ref": "#/$defs/actor" },
+    "origin": { "enum": ["console", "panel", "cli", "recipe", "automation", "api"] },
+    "intent": { "type": "string" },
+    "rationale": { "type": "string" },
+    "note": { "type": "string" },
+    "class": { "enum": ["analysis", "corrective", "attenuative", "reconstruction", "creative", "safety"] },
+    "label": { "type": "string" },
+    "state_before": { "$ref": "#/$defs/state" },
+    "state_after": { "$ref": "#/$defs/state" },
+    "measurements": { "type": "object" },
+    "input_hash": { "$ref": "#/$defs/hash" },
+    "output_hash": { "$ref": "#/$defs/hash" },
+    "stack_hash": { "$ref": "#/$defs/hash" },
+    "inherited_from": {
+      "type": "object", "required": ["project", "step_id", "event_hash"],
+      "properties": { "project": { "type": "string" }, "step_id": { "type": "string" }, "event_hash": { "type": "string" } }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "scope": {
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        { "properties": { "kind": { "const": "clip" } }, "additionalProperties": false },
+        { "properties": { "kind": { "const": "time_range" }, "t0": { "type": "number" }, "t1": { "type": "number" } }, "required": ["t0", "t1"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "band" }, "f_lo": { "type": "number" }, "f_hi": { "type": "number" } }, "required": ["f_lo", "f_hi"], "additionalProperties": false },
+        { "properties": { "kind": { "const": "tf_patch" }, "t0": { "type": "number" }, "t1": { "type": "number" }, "f_lo": { "type": "number" }, "f_hi": { "type": "number" } }, "required": ["t0", "t1", "f_lo", "f_hi"], "additionalProperties": false }
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "required": ["feature", "relation", "source"],
+      "properties": {
+        "feature": { "type": "string" },
+        "select": { "type": "object" },
+        "relation": { "enum": ["offset", "target", "equals", "fraction", "whole"] },
+        "value": { "type": "number" },
+        "source": { "enum": ["declared", "inferred"] },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "actor": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["user", "assistant", "automation", "system"] },
+        "name": { "type": "string" },
+        "model": { "type": "string" },
+        "provider": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "type": "object",
+      "required": ["version", "t0", "t1", "sample_rate", "channels", "peak_dbfs", "rms_dbfs", "noise_floor_dbfs", "tonal_lines", "octave_bands"],
+      "properties": {
+        "version": { "type": "integer" },
+        "tonal_lines": {
+          "type": "array",
+          "items": { "type": "object", "required": ["freq_hz", "width_hz", "prominence_db", "persistence", "level_db"] }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": ["clip"],
+      "properties": { "clip": { "$ref": "#/$defs/features" }, "scope": { "$ref": "#/$defs/features" } },
+      "additionalProperties": false
+    }
+  }
+}

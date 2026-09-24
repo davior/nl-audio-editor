@@ -1,0 +1,28 @@
+{
+  "id": "compressor",
+  "version": 1,
+  "title": "Compressor",
+  "summary": "Broadband compressor for speech: reduces the level above a threshold so quiet and loud passages come closer together.",
+  "category": "gain_level",
+  "class": "corrective",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "threshold_dbfs", "title": "Threshold", "type": "number", "unit": "dBFS", "min": -80, "max": 0, "step": 0.5, "default": -24 },
+    { "id": "ratio", "title": "Ratio", "type": "number", "min": 1, "max": 20, "step": 0.1, "default": 3 },
+    { "id": "knee_db", "title": "Knee", "type": "number", "unit": "dB", "min": 0, "max": 24, "step": 0.5, "default": 6 },
+    { "id": "attack_ms", "title": "Attack (look-ahead)", "type": "number", "unit": "ms", "min": 0, "max": 500, "step": 1, "default": 10 },
+    { "id": "release_ms", "title": "Release", "type": "number", "unit": "ms", "min": 1, "max": 5000, "step": 1, "default": 150 },
+    { "id": "makeup_db", "title": "Make-up gain", "type": "number", "unit": "dB", "min": -24, "max": 24, "step": 0.1, "default": "auto", "auto_allowed": true,
+      "help": "auto restores the input's peak level." }
+  ],
+  "identity": [{ "ratio": 1, "makeup_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "max_reduction_db", "title": "Largest reduction", "unit": "dB" },
+    { "id": "mean_reduction_db", "title": "Mean reduction while active", "unit": "dB" },
+    { "id": "makeup_db", "title": "Make-up gain", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "threshold_dbfs", "feature": "loudness_lufs", "note": "A threshold is usually relative to the programme level." }
+  ]
+}

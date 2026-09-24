@@ -1,0 +1,39 @@
+{
+  "id": "spectral_compressor",
+  "version": 1,
+  "title": "Spectral compressor",
+  "summary": "Push down the high points inside a selected time × frequency area — whines, bangs, or a loud foreground voice — cell by cell. Only ever reduces.",
+  "category": "spectral",
+  "class": "attenuative",
+  "scopes": ["clip", "time_range", "band", "tf_patch"],
+  "params": [
+    { "id": "mode", "title": "What counts as a high point", "type": "enum", "values": ["auto", "tonal", "transient", "level"], "default": "auto",
+      "help": "tonal: stands out from the median of neighbouring frequencies (whines). transient: stands out from the upper quartile of neighbouring moments (bangs). auto: either. level: rises far above the band's background (a loud foreground voice)." },
+    { "id": "threshold_db", "title": "Threshold", "type": "number", "unit": "dB", "min": 0, "max": 48, "step": 0.5, "default": "auto", "auto_allowed": true,
+      "help": "How far above the reference a point must rise before it is reduced. auto: 20 dB in level mode (the reference there is the band's background), 6 dB otherwise." },
+    { "id": "ratio", "title": "Ratio", "type": "number", "min": 1, "max": 50, "step": 0.1, "default": 4 },
+    { "id": "knee_db", "title": "Knee", "type": "number", "unit": "dB", "min": 0, "max": 24, "step": 0.5, "default": 6 },
+    { "id": "max_reduction_db", "title": "Maximum reduction", "type": "number", "unit": "dB", "min": 0, "max": 60, "step": 0.5, "default": 20 },
+    { "id": "attack_ms", "title": "Attack (look-ahead)", "type": "number", "unit": "ms", "min": 0, "max": 500, "step": 1, "default": 10 },
+    { "id": "release_ms", "title": "Release", "type": "number", "unit": "ms", "min": 0, "max": 5000, "step": 1, "default": 150 },
+    { "id": "resolution", "title": "Resolution", "type": "enum", "values": ["auto", "fine_time", "balanced", "fine_frequency"], "default": "auto",
+      "help": "FFT 1024 / 2048 / 4096 at 48 kHz. auto: fine_frequency for tonal, fine_time for transient, balanced otherwise." },
+    { "id": "tonal_width_hz", "title": "Tonal neighbourhood", "type": "number", "unit": "Hz", "min": 20, "max": 2000, "step": 5, "default": 150 },
+    { "id": "transient_width_ms", "title": "Transient neighbourhood", "type": "number", "unit": "ms", "min": 20, "max": 2000, "step": 5, "default": 400 },
+    { "id": "level_context_s", "title": "Level context", "type": "number", "unit": "s", "min": 0.5, "max": 30, "step": 0.5, "default": 3 },
+    { "id": "link_channels", "title": "Link channels", "type": "bool", "default": true }
+  ],
+  "identity": [{ "ratio": 1 }, { "max_reduction_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "cells_reduced_pct", "title": "Cells reduced", "unit": "%" },
+    { "id": "max_reduction_db", "title": "Largest reduction", "unit": "dB" },
+    { "id": "mean_reduction_db", "title": "Mean reduction where reduced", "unit": "dB" },
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" },
+    { "id": "band_peak_before_db", "title": "Band peak before", "unit": "dB" },
+    { "id": "band_peak_after_db", "title": "Band peak after", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "scope.f_lo", "feature": "tonal_lines", "note": "A patch around a detected line binds to that line." }
+  ]
+}
