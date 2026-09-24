@@ -43,7 +43,7 @@ waveform is visible while working; in the application the waveform has a view-on
 Every step is relative to the clip's own levels, so the order does not change what the reductions
 do — but they move the peak by hundredths of a dB, so normalising last makes the −1 dBFS target
 exact at the end and the final limiter has nothing to do (tested). Your manual order is recorded
-as you perform it. `OPEN:` confirm this reordering is acceptable.
+as you perform it. **Agreed with the product owner (2026-09-24).**
 
 ### Why steps 2–3 become two steps
 
@@ -52,8 +52,8 @@ that the later normalisation does not redo: gain is linear and float does not cl
 Removing the DC offset *before* normalising makes the peak target exact (an offset
 shifts the peaks). The target is −1 dBFS rather than full scale so that the
 always-last limiter (ceiling −1 dBFS) has nothing to do; the result is about 1 dB
-quieter than the current final amplify. `OPEN:` confirm −1 dBFS is acceptable, or
-choose a different default target.
+quieter than the current final amplify. **Agreed with the product owner (2026-09-24):** the
+default target stays −1 dBFS.
 
 ### Why steps 5–6 become one step
 

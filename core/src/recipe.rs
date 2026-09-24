@@ -23,7 +23,12 @@ use crate::scope::Scope;
 pub const FORMAT: &str = "nlae-recipe";
 pub const FORMAT_VERSION: u32 = 1;
 
+/// The current built-in clean-up (version 2: lines must also stand out in the
+/// speech pauses).
 pub const BUILTIN_SPOKEN_WORD_CLEANUP: &str =
+    include_str!("../../recipes/builtin/spoken-word-cleanup.v2.json");
+/// Version 1, kept so replays recorded with it can be repeated exactly.
+pub const BUILTIN_SPOKEN_WORD_CLEANUP_V1: &str =
     include_str!("../../recipes/builtin/spoken-word-cleanup.v1.json");
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,8 +115,11 @@ impl Recipe {
 
     pub fn builtin(name: &str) -> Option<Recipe> {
         match name {
-            "spoken-word-cleanup" => Some(
+            "spoken-word-cleanup" | "spoken-word-cleanup@2" => Some(
                 Recipe::parse(BUILTIN_SPOKEN_WORD_CLEANUP).expect("built-in recipes are valid"),
+            ),
+            "spoken-word-cleanup@1" => Some(
+                Recipe::parse(BUILTIN_SPOKEN_WORD_CLEANUP_V1).expect("built-in recipes are valid"),
             ),
             _ => None,
         }
@@ -197,8 +205,41 @@ pub struct ReplayPlan {
     pub skipped: Vec<usize>,
 }
 
+/// Replay a recipe as one plan, as an interface does: record the dry-run diff
+/// (`recipe.replayed`), then preview the plan. `intent` is the user's words.
+pub fn preview_replay<S: Store>(
+    project: &mut Project<S>,
+    env: &mut dyn crate::provenance::Env,
+    recipe: &Recipe,
+    mode: ReplayMode,
+    actor: Actor,
+    window: Option<(f64, f64)>,
+    intent: Option<&str>,
+) -> Result<(ReplayPlan, crate::project::Preview), ProjectError> {
+    let mut plan = plan_replay(project, recipe, mode, false, actor)?;
+    if let Some(w) = intent {
+        for d in plan.drafts.iter_mut() {
+            d.intent = Some(w.to_string());
+        }
+    }
+    project.record(
+        env,
+        "recipe.replayed",
+        None,
+        json!({ "recipe": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode, "dry_run": false, "diff": plan.diff }),
+    )?;
+    let opts = crate::project::PreviewOptions {
+        window,
+        plan: true,
+        recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
+        exchange: None,
+    };
+    let pv = project.preview(env, plan.drafts.clone(), opts)?;
+    Ok((plan, pv))
+}
+
 /// Summarise a resolved value for the diff (long arrays are counted, not listed).
-fn summarise(v: &Value) -> Value {
+pub(crate) fn summarise(v: &Value) -> Value {
     match v {
         Value::Array(a) if a.len() > 8 && a.iter().all(Value::is_number) => {
             json!(format!("{} values", a.len()))

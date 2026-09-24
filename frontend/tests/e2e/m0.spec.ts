@@ -1,82 +1,6 @@
 // The M0 interface end to end, in Chromium with a fake microphone.
-import { expect, test, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import type { ViewState } from "../../src/core/types";
-import type { Fixtures } from "./global-setup";
-import { BASE_URL, FIX } from "./paths";
-
-interface Nlae {
-  ready?: boolean;
-  project: {
-    id: string;
-    name: string;
-    sourceSha: string;
-    stackHash: string;
-    steps: number;
-    events: number;
-    readOnly: string | null;
-    ok: boolean;
-    parent: string | null;
-    problems: string[];
-    lineageVerified: boolean[];
-  };
-  view: ViewState;
-  viewSaved: ViewState;
-  playing: boolean;
-  playhead: number;
-  waveform: { columns: number; columnsWithSignal: number; which: string };
-  spectrogram: { columns: number; rows: number; litCells: number; which: string };
-}
-
-const fx: Fixtures = JSON.parse(readFileSync(join(FIX, "fixtures.json"), "utf8"));
-
-const nlae = (page: Page) => page.evaluate(() => window.__nlae as unknown as Nlae);
-
-async function start(page: Page) {
-  await page.goto(BASE_URL);
-  await page.waitForFunction(() => window.__nlae?.ready === true);
-}
-
-/**
- * Both lanes have drawn what the monitor selects: enough waveform columns carry signal and enough
- * spectrogram cells are lit.
- */
-async function lanesDrawn(page: Page, share = { columns: 0.5, cells: 0.2 }) {
-  await page.waitForFunction((share) => {
-    const s = window.__nlae as unknown as Nlae | undefined;
-    return (
-      !!s?.waveform &&
-      !!s.spectrogram &&
-      s.waveform.which === s.view.monitor &&
-      s.spectrogram.which === s.view.monitor &&
-      s.waveform.columnsWithSignal > share.columns * s.waveform.columns &&
-      s.spectrogram.litCells > share.cells * s.spectrogram.columns * s.spectrogram.rows
-    );
-  }, share);
-}
-
-async function importClip(page: Page) {
-  await page.getByTestId("import-input").setInputFiles(fx.wav);
-  await expect(page.getByTestId("editor")).toBeVisible();
-  await lanesDrawn(page);
-}
-
-/** Drag across a lane between two points given as fractions of its size. */
-async function drag(page: Page, lane: "waveform" | "spectrogram", from: [number, number], to: [number, number]) {
-  const box = (await page.getByTestId(lane).boundingBox())!;
-  await page.mouse.move(box.x + box.width * from[0], box.y + box.height * from[1]);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * to[0], box.y + box.height * to[1], { steps: 8 });
-  await page.mouse.up();
-}
-
-async function viewSaved(page: Page) {
-  await page.waitForFunction(() => {
-    const s = window.__nlae as unknown as Nlae | undefined;
-    return !!s && JSON.stringify(s.view) === JSON.stringify(s.viewSaved);
-  });
-}
+import { expect, test } from "@playwright/test";
+import { drag, fx, importClip, lanesDrawn, nlae, start, viewSaved } from "./helpers";
 
 test("1. a recording loads and both lanes render", async ({ page }) => {
   await start(page);
@@ -88,6 +12,11 @@ test("1. a recording loads and both lanes render", async ({ page }) => {
   await expect(page.getByTestId("integrity")).toHaveAttribute("data-ok", "true");
   await expect(page.getByTestId("library-entry")).toHaveCount(1);
   await expect(page.getByTestId("project-name")).toHaveText("golden_a_short");
+  // The lanes come first; the analysis follows in its own worker and is logged.
+  await expect.poll(async () => (await nlae(page)).analysis).toBe("done");
+  await expect(page.getByTestId("analysing")).toHaveCount(0);
+  await page.getByTestId("log-toggle").click();
+  await expect(page.getByTestId("log")).toContainText("analysis.computed");
 });
 
 test("2. seek and play", async ({ page }) => {
@@ -154,6 +83,8 @@ test("4. save, reload and reopen: hash, view and selection are identical and the
   await page.reload();
   await page.waitForFunction(() => window.__nlae?.ready === true);
   await expect(page.getByTestId("editor")).toBeVisible();
+  // The editor reads the log after it appears: wait for it, and reopening logs nothing.
+  await expect.poll(async () => (await nlae(page)).project.events).toBe(before.project.events);
   const after = await nlae(page);
   expect(after.view).toEqual(before.view);
   expect(after.project.id).toBe(before.project.id);
@@ -173,12 +104,13 @@ test("4. save, reload and reopen: hash, view and selection are identical and the
   await start(page2);
   await page2.getByTestId("bundle-input").setInputFiles(bundle);
   await expect(page2.getByTestId("editor")).toBeVisible();
+  // The export itself is logged, so the bundle holds one more event. The
+  // editor reads the log after it appears: wait for it.
+  await expect.poll(async () => (await nlae(page2)).project.events).toBe(before.project.events + 1);
   const opened = await nlae(page2);
   expect(opened.view).toEqual(before.view);
   expect(opened.project.id).toBe(before.project.id);
   expect(opened.project.sourceSha).toBe(fx.sourceSha);
-  // The export itself is logged, so the bundle holds one more event.
-  expect(opened.project.events).toBe(before.project.events + 1);
   await expect(page2.getByTestId("integrity")).toHaveAttribute("data-ok", "true");
   await other.close();
 });

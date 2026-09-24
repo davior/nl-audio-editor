@@ -19,7 +19,10 @@ interface LaneProps {
   onSelectTf: (sel: ViewState["tfSelection"]) => void;
   onZoom: (factor: number, around: number) => void;
   onScroll: (dt: number) => void;
-  revision: number;
+  /** Changes whenever what the lanes draw changes (the stack hash). */
+  renderKey: string;
+  /** Called when a spectrogram view has fully arrived. */
+  onComplete?: () => void;
 }
 
 function timeAt(x: number, width: number, v: ViewState) {
@@ -151,7 +154,7 @@ export function Waveform(p: LaneProps) {
     return () => {
       live = false;
     };
-  }, [p.projectId, p.which, p.view.t0, p.view.t1, p.width, p.revision]);
+  }, [p.projectId, p.which, p.view.t0, p.view.t1, p.width, p.renderKey]);
 
   useEffect(() => {
     const c = ref.current;
@@ -224,7 +227,30 @@ interface SpecData extends LaneData<Uint8Array> {
   rows: number;
   fMax: number;
   scale: ViewState["scale"];
+  /** All columns have arrived (long views arrive in parts, left to right). */
+  complete: boolean;
 }
+
+/** Finished spectrogram levels by project, render and request, most recent last. */
+const specCache = new Map<string, Uint8Array>();
+const SPEC_CACHE_ENTRIES = 8;
+
+function cacheGet(key: string): Uint8Array | undefined {
+  const v = specCache.get(key);
+  if (v) {
+    specCache.delete(key);
+    specCache.set(key, v);
+  }
+  return v;
+}
+
+function cachePut(key: string, v: Uint8Array) {
+  specCache.set(key, v);
+  while (specCache.size > SPEC_CACHE_ENTRIES) specCache.delete(specCache.keys().next().value!);
+}
+
+/** Analysis frames a request covers beyond which it is fetched in parts. */
+const FRAMES_PER_PART = 8000;
 
 export function Spectrogram(p: LaneProps) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -253,19 +279,38 @@ export function Spectrogram(p: LaneProps) {
       fft_at_48k: 2048,
     };
     const which = p.which;
+    const meta = { which, t0: req.t0, t1: req.t1, columns: req.columns, rows: req.rows, fMax: req.f_max, scale: req.scale };
+    const key = `${p.projectId}|${which}|${p.renderKey}|${JSON.stringify(req)}`;
+    const hit = cacheGet(key);
+    if (hit) {
+      setLevels({ ...meta, values: hit, complete: true });
+      p.onComplete?.();
+      return;
+    }
+    // Long views are fetched in parts so the lane fills in from the left
+    // instead of staying empty until the whole view is computed.
+    const frames = ((req.t1 - req.t0) * p.sampleRate) / ((req.fft_at_48k * p.sampleRate) / 48000 / 4);
+    const parts = Math.max(1, Math.min(req.columns, Math.ceil(frames / FRAMES_PER_PART)));
+    const per = Math.ceil(req.columns / parts);
     const end = begin();
-    core
-      .spectrogram(p.projectId, which, req)
-      .then(
-        (values) =>
-          live &&
-          setLevels({ which, t0: req.t0, t1: req.t1, columns: req.columns, rows: req.rows, fMax: req.f_max, scale: req.scale, values }),
-      )
-      .finally(end);
+    (async () => {
+      const values = new Uint8Array(req.rows * req.columns);
+      for (let c0 = 0; c0 < req.columns; c0 += per) {
+        const c1 = Math.min(req.columns, c0 + per);
+        const part = await core.spectrogramPart(p.projectId, which, req, c0, c1);
+        if (!live) return;
+        const w = c1 - c0;
+        for (let r = 0; r < req.rows; r++) values.set(part.subarray(r * w, (r + 1) * w), r * req.columns + c0);
+        const complete = c1 === req.columns;
+        if (complete) cachePut(key, values);
+        setLevels({ ...meta, values, complete });
+        if (complete) p.onComplete?.();
+      }
+    })().finally(end);
     return () => {
       live = false;
     };
-  }, [p.projectId, p.which, p.view.t0, p.view.t1, p.view.fMax, p.view.scale, p.width, p.revision]);
+  }, [p.projectId, p.which, p.view.t0, p.view.t1, p.view.fMax, p.view.scale, p.width, p.renderKey, p.sampleRate]);
 
   // Colour the levels once per arrival or range change. They arrive over −200…0 dB;
   // the display spans the top `dbRange` dB below the loudest cell.
@@ -344,6 +389,7 @@ export function Spectrogram(p: LaneProps) {
       which: levels.which,
       t0: levels.t0,
       t1: levels.t1,
+      complete: levels.complete,
     });
   }, [levels, p.view, p.playhead, p.width, drag]);
 

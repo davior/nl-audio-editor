@@ -1,0 +1,15 @@
+{
+  // VS Code offers these when the repository is opened. All are optional.
+  "recommendations": [
+    // Rust: errors as you type, and Run / Debug above every test and main function.
+    "rust-lang.rust-analyzer",
+    // CodeLLDB: the debugger for the command line and the Rust tests.
+    "vadimcn.vscode-lldb",
+    // Prettier: formats the frontend the way CI checks it.
+    "esbenp.prettier-vscode",
+    // Run and debug the end-to-end tests from the editor.
+    "ms-playwright.playwright",
+    // Run the frontend's unit tests from the editor.
+    "vitest.explorer"
+  ]
+}

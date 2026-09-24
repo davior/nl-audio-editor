@@ -16,4 +16,9 @@ persistence: number,
 /**
  * Long-term level at the line (dB relative to a full-scale sine).
  */
-level_db: number, };
+level_db: number, 
+/**
+ * Prominence in the speech pauses alone; absent when the span has less
+ * than `MIN_PAUSE_S` of pause.
+ */
+pause_prominence_db?: number | null, };

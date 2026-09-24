@@ -16,7 +16,8 @@
         "step.previewed", "step.modified", "step.accepted", "plan.accepted", "step.rejected",
         "step.removed", "step.annotated", "stack.rated",
         "recipe.saved", "recipe.replayed", "render.exported", "dataset.exported",
-        "project.clone_made", "project.cloned_from", "bundle.exported"
+        "project.clone_made", "project.cloned_from", "bundle.exported",
+        "assistant.exchange"
       ]
     },
     "actor": { "$ref": "step.schema.json#/$defs/actor" },

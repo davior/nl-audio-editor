@@ -54,7 +54,7 @@ explains the change. A replay becomes a plan, previewed and accepted as one unit
 |---|---|---|
 | `steps.jsonl` | decided step | state → action (both forms) → actor, origin, intent → decision → outcome → rating → lineage, hashes |
 | `episodes.jsonl` | project | source features, final stack, stack and output hashes, ratings, lineage; clones forked from the same step are linked as comparison pairs |
-| `chat.jsonl` | step with an intent | OpenAI chat fine-tuning format: the user's words (plus the analysis summary the assistant would see) → a tool call against the registry's schema |
+| `chat.jsonl` | decided proposal, or step with an intent | OpenAI chat fine-tuning format. When the model proposed it, the logged exchange itself: exactly what was sent (words, analysis numbers, tools) and what came back (`metadata.source: "exchange"`, with the model, provider and prompt version). Otherwise reconstructed with the same system prompt and message format: the user's words and the analysis summary → a tool call against the registry's schema (`"reconstructed"`). Either way with the user's decision |
 | `manifest.json` | export | schema, feature and registry versions, options, counts, SHA-256 of each file |
 
 Audio is **not** included by default: records carry the source and render hashes, which join

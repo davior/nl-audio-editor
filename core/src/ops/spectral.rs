@@ -49,6 +49,10 @@ struct LineParams {
     target_excess_db: f64,
     max_depth_db: f64,
     width_factor: f64,
+    /// Version 2 only. Version 1 detects lines without the pause rule, so
+    /// recipes recorded with it replay as they did.
+    #[serde(default)]
+    require_in_pauses: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, Deserialize)]
@@ -116,6 +120,7 @@ impl Op for LineReduce {
                 min_prominence_db: p.min_prominence_db,
                 min_persistence: p.min_persistence,
                 max_lines: p.max_lines as usize,
+                require_in_pauses: p.require_in_pauses,
                 ..LineConfig::default()
             };
             tonal::detect_in(&spec, input, &cfg)

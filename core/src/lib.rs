@@ -6,6 +6,7 @@
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
 pub mod analysis;
+pub mod assistant;
 pub mod audio;
 pub mod dataset;
 pub mod dsp;

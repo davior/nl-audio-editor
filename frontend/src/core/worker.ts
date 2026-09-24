@@ -2,11 +2,30 @@
 // The core runs here, off the main thread: decoding, analysis, rendering and
 // every change to a project. The page only draws and plays what comes back.
 import * as Comlink from "comlink";
-import init, { WasmProject, parity, descriptors } from "../core-wasm/nlae.js";
+import init, { WasmProject, parity, descriptors, route, parse_response, correction_request } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
-import type { ProjectSummary, Pcm, Which, SpectrogramReq } from "./types";
+import type {
+  Exchange,
+  Pcm,
+  PreviewRecord,
+  PreviewResult,
+  ProjectSummary,
+  Proposal,
+  Route,
+  RoutedStep,
+  Selection,
+  SpectrogramReq,
+  Turn,
+  Which,
+} from "./types";
 
 const ready = init({ module_or_path: wasmUrl });
+
+/** Hand byte buffers back without copying them. */
+function transferFiles(files: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  const buffers = new Set(Object.values(files).map((b) => b.buffer as ArrayBuffer));
+  return Comlink.transfer(files, [...buffers]);
+}
 const projects = new Map<string, WasmProject>();
 
 function get(id: string): WasmProject {
@@ -16,7 +35,14 @@ function get(id: string): WasmProject {
 }
 
 function summary(p: WasmProject): ProjectSummary {
-  return { id: p.id(), manifest: p.manifest(), report: p.report(), state: p.state(), readOnly: p.read_only() ?? null };
+  return {
+    id: p.id(),
+    manifest: p.manifest(),
+    report: p.report(),
+    state: p.state(),
+    readOnly: p.read_only() ?? null,
+    needsAnalysis: p.needs_analysis(),
+  };
 }
 
 function keep(p: WasmProject): ProjectSummary {
@@ -49,11 +75,11 @@ const api = {
   async events(id: string): Promise<Record<string, unknown>[]> {
     return get(id).events();
   },
-  async takeChangedFiles(id: string): Promise<Record<string, Uint8Array>> {
-    return get(id).take_changed_files();
+  async takeChangedFiles(id: string, skipSource = false): Promise<Record<string, Uint8Array>> {
+    return transferFiles(get(id).take_changed_files(skipSource));
   },
   async allFiles(id: string): Promise<Record<string, Uint8Array>> {
-    return get(id).all_files();
+    return transferFiles(get(id).all_files());
   },
   async pcm(id: string, which: Which): Promise<Pcm> {
     const r = get(id).pcm(which) as Pcm;
@@ -70,6 +96,17 @@ const api = {
     const r = get(id).spectrogram(which, req);
     return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
   },
+  /** Columns `[c0, c1)` of a spectrogram request (rows × (c1 − c0) levels). */
+  async spectrogramPart(id: string, which: Which, req: SpectrogramReq, c0: number, c1: number): Promise<Uint8Array> {
+    const r = get(id).spectrogram_part(which, req, c0, c1);
+    return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
+  },
+  /** Log an analysis made by the analysis worker, after the core checks it describes this source. */
+  async recordAnalysis(id: string, features: Record<string, unknown>, renderHash: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.record_analysis(JSON.stringify(features), renderHash);
+    return summary(p);
+  },
   async renderHash(id: string, which: Which): Promise<string> {
     return get(id).render_hash(which);
   },
@@ -84,6 +121,77 @@ const api = {
   },
   async exportBundle(id: string): Promise<Uint8Array> {
     const r = get(id).export_bundle();
+    return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
+  },
+  // --- The console (M1) ---
+  async route(words: string, selection: Selection | null): Promise<Route> {
+    await ready;
+    return route(words, selection);
+  },
+  async parseResponse(response: string): Promise<{ proposal?: Proposal; problems?: string[] }> {
+    await ready;
+    return parse_response(response);
+  },
+  async correctionRequest(request: string, response: string, problems: string[]): Promise<string> {
+    await ready;
+    return correction_request(request, response, problems);
+  },
+  async previewRouted(id: string, steps: RoutedStep[], words: string): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_routed(steps, words) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async previewRecipe(id: string, name: string, words: string): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_recipe(name, words) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async assistantRequest(id: string, model: string, history: Turn[], words: string, selection: Selection | null): Promise<string> {
+    return get(id).assistant_request(model, history, words, selection);
+  },
+  async recordExchange(id: string, exchange: Exchange): Promise<string> {
+    return get(id).record_exchange(exchange);
+  },
+  async previewProposal(
+    id: string,
+    proposal: Proposal,
+    words: string,
+    model: string,
+    provider: string,
+    exchange: string,
+  ): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_proposal(proposal, words, model, provider, exchange) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async accept(
+    id: string,
+    previewId: string,
+    overrides: Record<number, Record<string, unknown>>,
+    disabled: number[],
+    note?: string,
+  ): Promise<ProjectSummary> {
+    const p = get(id);
+    p.accept(previewId, overrides, disabled, note);
+    return summary(p);
+  },
+  async reject(id: string, previewId: string, reason?: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.reject(previewId, reason || undefined);
+    return summary(p);
+  },
+  async removeTop(id: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.remove_top();
+    return summary(p);
+  },
+  async rateStack(id: string, overall: number, note?: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.rate_stack(overall, note || undefined);
+    return summary(p);
+  },
+  async exportWav(id: string, format: "f32" | "pcm24" | "pcm16"): Promise<Uint8Array> {
+    const r = get(id).export_wav(format);
     return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
   },
   async close(id: string): Promise<void> {

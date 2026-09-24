@@ -1,0 +1,608 @@
+//! Routine requests answered without the model: the built-in clean-up, undo,
+//! what to listen to, and commands that state their own numbers. The same
+//! words always do the same thing, cost nothing and need no network.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::scope::Scope;
+
+/// What the interface has selected, if anything.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Selection {
+    /// A time range: `[t0, t1]` in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<[f64; 2]>,
+    /// A time × frequency area: `[t0, t1, f_lo, f_hi]` (seconds, hertz).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<[f64; 4]>,
+}
+
+impl Selection {
+    /// The area if there is one, else the time range.
+    pub fn scope(&self) -> Option<Scope> {
+        if let Some([t0, t1, f_lo, f_hi]) = self.area {
+            return Some(Scope::TfPatch { t0, t1, f_lo, f_hi });
+        }
+        self.time_scope()
+    }
+
+    /// The time range, or the time span of the area.
+    pub fn time_scope(&self) -> Option<Scope> {
+        match (self.time, self.area) {
+            (Some([t0, t1]), _) => Some(Scope::TimeRange { t0, t1 }),
+            (None, Some([t0, t1, _, _])) => Some(Scope::TimeRange { t0, t1 }),
+            _ => None,
+        }
+    }
+}
+
+/// How a request is handled.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "route", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum Route {
+    /// Replay a built-in recipe, adaptively.
+    Recipe { name: String },
+    /// Steps whose values the words give.
+    Steps { steps: Vec<RoutedStep> },
+    /// Switch what is heard and drawn: `source`, `stack` or `residual`.
+    Listen { which: String },
+    /// Remove the top step (the history is kept).
+    Undo,
+    /// Needs the model.
+    Model,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RoutedStep {
+    pub op: String,
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown>"))]
+    pub params: Value,
+    pub scope: Scope,
+    /// What was understood, in words (shown, and recorded as the rationale).
+    pub understood: String,
+}
+
+impl RoutedStep {
+    /// A draft for a preview: the user's own request, with what was understood
+    /// recorded as the rationale.
+    pub fn draft(
+        &self,
+        origin: crate::project::step::Origin,
+        words: &str,
+    ) -> crate::project::step::StepDraft {
+        let mut d = crate::project::step::StepDraft::new(
+            &self.op,
+            self.params.clone(),
+            self.scope.clone(),
+            crate::provenance::Actor::user(),
+            origin,
+        );
+        d.intent = Some(words.to_string());
+        d.rationale = Some(self.understood.clone());
+        d
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Unit {
+    Hz,
+    Db,
+    None,
+}
+
+/// Lower case, dashes as "to", thousands separators removed, spacing collapsed.
+fn normalise(words: &str) -> String {
+    let lower = words
+        .to_lowercase()
+        .replace(['–', '—'], " to ")
+        .replace("dbfs", "db")
+        .replace("decibels", "db")
+        .replace("decibel", "db")
+        .replace("hertz", "hz");
+    let chars: Vec<char> = lower.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let digit = |j: usize| chars.get(j).is_some_and(|c| c.is_ascii_digit());
+        // "3,100" → "3100"
+        if c == ',' && i > 0 && digit(i - 1) && digit(i + 1) && digit(i + 2) && digit(i + 3) {
+            continue;
+        }
+        // "3100-3200" → "3100 to 3200"
+        if c == '-' && i > 0 && digit(i - 1) && digit(i + 1) {
+            out.push_str(" to ");
+            continue;
+        }
+        out.push(c);
+    }
+    out.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', '!', '?'])
+        .to_string()
+}
+
+/// Numbers in order, each with the unit written after it and that unit's
+/// scale (1000 for kilohertz).
+fn numbers(text: &str) -> Vec<(f64, Unit, f64)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let starts = c.is_ascii_digit()
+            || ((c == '-' || c == '+' || c == '.')
+                && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())
+                && (i == 0 || !chars[i - 1].is_alphanumeric()));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let begin = i;
+        i += 1;
+        while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+            i += 1;
+        }
+        let Ok(v) = chars[begin..i].iter().collect::<String>().parse::<f64>() else {
+            continue;
+        };
+        let rest: String = chars[i..].iter().collect();
+        let rest = rest.trim_start();
+        let (unit, scale) = if rest.starts_with("khz") || rest.starts_with("k ") || rest == "k" {
+            (Unit::Hz, 1000.0)
+        } else if rest.starts_with("hz") {
+            (Unit::Hz, 1.0)
+        } else if rest.starts_with("db") {
+            (Unit::Db, 1.0)
+        } else {
+            (Unit::None, 1.0)
+        };
+        out.push((v, unit, scale));
+    }
+    out
+}
+
+fn has_any(text: &str, words: &[&str]) -> bool {
+    words.iter().any(|w| text.contains(w))
+}
+
+/// Frequencies in hertz: numbers marked as frequencies, and unmarked numbers
+/// in a range written "X to Y kHz" (the unit written once applies to both).
+fn frequencies(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
+    let mut f = Vec::new();
+    for (i, &(v, u, scale)) in nums.iter().enumerate() {
+        match (u, nums.get(i + 1)) {
+            (Unit::Hz, _) => f.push(v * scale),
+            (Unit::None, Some(&(_, Unit::Hz, next_scale))) => f.push(v * next_scale),
+            _ => {}
+        }
+    }
+    f
+}
+
+fn decibels(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
+    nums.iter()
+        .filter(|(_, u, _)| *u == Unit::Db)
+        .map(|(v, _, _)| *v)
+        .collect()
+}
+
+fn step(op: &str, params: Value, scope: Scope, understood: String) -> Route {
+    Route::Steps {
+        steps: vec![RoutedStep {
+            op: op.into(),
+            params,
+            scope,
+            understood,
+        }],
+    }
+}
+
+fn scope_words(scope: &Scope) -> String {
+    match scope {
+        Scope::Clip => "across the whole recording".into(),
+        Scope::TimeRange { t0, t1 } => format!("from {t0:.2} to {t1:.2} s"),
+        Scope::Band { f_lo, f_hi } => format!("between {f_lo:.0} and {f_hi:.0} Hz"),
+        Scope::TfPatch { t0, t1, f_lo, f_hi } => {
+            format!("in the selected area ({t0:.2}–{t1:.2} s, {f_lo:.0}–{f_hi:.0} Hz)")
+        }
+    }
+}
+
+/// Route a request. `selection` is what "here" or "the selection" refers to.
+pub fn route(words: &str, selection: Option<&Selection>) -> Route {
+    let t = normalise(words);
+    let nums = numbers(&t);
+    let freqs = frequencies(&nums);
+    let dbs = decibels(&nums);
+    let here = has_any(
+        &t,
+        &[
+            " here",
+            "this bit",
+            "this part",
+            "selection",
+            "selected",
+            "this area",
+        ],
+    );
+    let area = if here {
+        selection.and_then(Selection::scope)
+    } else {
+        None
+    };
+    let span = if here {
+        selection.and_then(Selection::time_scope)
+    } else {
+        None
+    };
+
+    // What to listen to.
+    if has_any(
+        &t,
+        &["play", "listen", "hear", "compare", "switch to", "show me"],
+    ) {
+        if has_any(&t, &["residual", "removed", "taken out", "what was cut"]) {
+            return Route::Listen {
+                which: "residual".into(),
+            };
+        }
+        if has_any(&t, &["original", "before", "untouched", "source"]) {
+            return Route::Listen {
+                which: "source".into(),
+            };
+        }
+        if has_any(&t, &["processed", "result", "cleaned", "after"]) {
+            return Route::Listen {
+                which: "stack".into(),
+            };
+        }
+    }
+
+    if t == "undo"
+        || t.starts_with("undo ")
+        || has_any(
+            &t,
+            &[
+                "remove the last step",
+                "take that back",
+                "take it back",
+                "undo that",
+            ],
+        )
+    {
+        return Route::Undo;
+    }
+
+    let cutting = has_any(
+        &t,
+        &[
+            "cut",
+            "notch",
+            "remove",
+            "reduce",
+            "attenuate",
+            "get rid of",
+            "lower",
+            "kill",
+            "clean",
+        ],
+    );
+
+    // A stated band: "cut 3,100 to 3,200 Hz by 12 dB".
+    if cutting && freqs.len() >= 2 && t.contains(" to ") {
+        let (lo, hi) = (freqs[0].min(freqs[1]), freqs[0].max(freqs[1]));
+        let mut params = json!({ "f_lo": lo, "f_hi": hi });
+        let depth = dbs.first().map(|d| d.abs());
+        if let Some(d) = depth {
+            params["depth_db"] = json!(d);
+        }
+        let scope = span.unwrap_or(Scope::Clip);
+        let how = depth.map_or("by the default 12 dB".to_string(), |d| format!("by {d} dB"));
+        return step(
+            "band_cut",
+            params,
+            scope.clone(),
+            format!("Cut {lo:.0}–{hi:.0} Hz {how}, {}.", scope_words(&scope)),
+        );
+    }
+
+    // One stated frequency: "remove the 750 Hz line".
+    if cutting && freqs.len() == 1 {
+        let f = freqs[0];
+        let half = (0.03 * f).max(25.0);
+        let scope = Scope::Band {
+            f_lo: (f - half).max(1.0),
+            f_hi: f + half,
+        };
+        return step(
+            "line_reduce",
+            json!({ "lines": "auto", "require_in_pauses": false }),
+            scope.clone(),
+            format!(
+                "Find the line near {f:.0} Hz and cut it until it matches its surroundings ({}).",
+                scope_words(&scope)
+            ),
+        );
+    }
+
+    if has_any(&t, &["normalise", "normalize"]) {
+        let target = dbs.first().map(|d| -d.abs()).unwrap_or(-1.0);
+        let scope = span.unwrap_or(Scope::Clip);
+        return step(
+            "normalise",
+            json!({ "target_peak_dbfs": target }),
+            scope.clone(),
+            format!("Bring the peak to {target} dBFS, {}.", scope_words(&scope)),
+        );
+    }
+
+    let louder = has_any(
+        &t,
+        &[
+            "gain",
+            "amplify",
+            "boost",
+            "louder",
+            "turn it up",
+            "turn up",
+            "raise",
+        ],
+    );
+    let quieter = has_any(
+        &t,
+        &["quieter", "turn it down", "turn down", "lower the level"],
+    );
+    if (louder || quieter) && !dbs.is_empty() {
+        let mut g = dbs[0];
+        if quieter && g > 0.0 {
+            g = -g;
+        }
+        let scope = span.unwrap_or(Scope::Clip);
+        return step(
+            "gain",
+            json!({ "gain_db": g }),
+            scope.clone(),
+            format!("Change the level by {g:+} dB, {}.", scope_words(&scope)),
+        );
+    }
+
+    if has_any(
+        &t,
+        &["dc offset", "remove dc", "remove the dc", "dc removal"],
+    ) {
+        return step(
+            "dc_remove",
+            json!({}),
+            Scope::Clip,
+            "Remove the DC offset.".into(),
+        );
+    }
+
+    if cutting && t.contains("hum") {
+        let scope = Scope::Band {
+            f_lo: 40.0,
+            f_hi: 1000.0,
+        };
+        return step(
+            "line_reduce",
+            json!({ "lines": "auto" }),
+            scope.clone(),
+            "Find the hum and its harmonics (40–1000 Hz) and cut each until it matches its surroundings.".into(),
+        );
+    }
+
+    if (cutting && has_any(&t, &["noise", "hiss"])) || has_any(&t, &["denoise", "noise reduction"])
+    {
+        let mut params = json!({});
+        if let Some(d) = dbs.first() {
+            params["reduction_db"] = json!(d.abs());
+        }
+        let scope = span.unwrap_or(Scope::Clip);
+        return step(
+            "noise_reduce",
+            params,
+            scope.clone(),
+            format!(
+                "Reduce steady noise, with the quietest steady region as the profile, {}.",
+                scope_words(&scope)
+            ),
+        );
+    }
+
+    if cutting && has_any(&t, &["lines", "whines", "tones", "whistles"]) {
+        return step(
+            "line_reduce",
+            json!({ "lines": "auto" }),
+            Scope::Clip,
+            "Find every line that runs through the recording, including its pauses, and flatten it.".into(),
+        );
+    }
+
+    // The spectral compressor: high points in the selected area.
+    if has_any(&t, &["compress", "tame", "squash", "push down", "flatten"])
+        && has_any(
+            &t,
+            &[
+                "peak", "bang", "click", "knock", "thump", "whine", "tone", "voice", "loud",
+            ],
+        )
+    {
+        let mode = if has_any(&t, &["bang", "click", "knock", "thump"]) {
+            "transient"
+        } else if has_any(&t, &["whine", "tone", "whistle"]) {
+            "tonal"
+        } else if has_any(&t, &["voice", "speaker"]) {
+            "level"
+        } else {
+            "auto"
+        };
+        let scope = area.unwrap_or(Scope::Clip);
+        return step(
+            "spectral_compressor",
+            json!({ "mode": mode }),
+            scope.clone(),
+            format!(
+                "Push down the {} high points {}.",
+                if mode == "auto" { "" } else { mode },
+                scope_words(&scope)
+            )
+            .replace("the  high", "the high"),
+        );
+    }
+
+    if has_any(&t, &["compress", "even out the level", "even out"]) {
+        let scope = span.unwrap_or(Scope::Clip);
+        return step(
+            "compressor",
+            json!({}),
+            scope.clone(),
+            format!("Compress the dynamics, {}.", scope_words(&scope)),
+        );
+    }
+
+    if (t.contains("clean") && (t.contains(" up") || t.contains("cleanup")))
+        || t.contains("clean-up")
+        || (t.contains("tidy") && t.contains(" up"))
+    {
+        return Route::Recipe {
+            name: "spoken-word-cleanup".into(),
+        };
+    }
+
+    Route::Model
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn only_step(r: Route) -> RoutedStep {
+        match r {
+            Route::Steps { mut steps } if steps.len() == 1 => steps.remove(0),
+            other => panic!("expected one step, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routine_requests_are_answered_locally() {
+        for w in [
+            "clean this recording up",
+            "Clean it up please.",
+            "can you do a clean-up",
+            "tidy this up",
+        ] {
+            assert_eq!(
+                route(w, None),
+                Route::Recipe {
+                    name: "spoken-word-cleanup".into()
+                },
+                "{w}"
+            );
+        }
+        assert_eq!(route("undo", None), Route::Undo);
+        assert_eq!(route("remove the last step", None), Route::Undo);
+        assert_eq!(
+            route("play what was removed", None),
+            Route::Listen {
+                which: "residual".into()
+            }
+        );
+        assert_eq!(
+            route("compare with the original", None),
+            Route::Listen {
+                which: "source".into()
+            }
+        );
+    }
+
+    #[test]
+    fn stated_numbers_become_steps() {
+        let s = only_step(route("cut 3,100 to 3,200 Hz by 12 dB", None));
+        assert_eq!(s.op, "band_cut");
+        assert_eq!(
+            s.params,
+            json!({"f_lo": 3100.0, "f_hi": 3200.0, "depth_db": 12.0})
+        );
+        assert_eq!(s.scope, Scope::Clip);
+
+        let s = only_step(route("notch 3.1-3.2 kHz", None));
+        assert_eq!(
+            (s.op.as_str(), &s.params["f_lo"], &s.params["f_hi"]),
+            ("band_cut", &json!(3100.0), &json!(3200.0))
+        );
+
+        let s = only_step(route("remove the 750 Hz whine", None));
+        assert_eq!(s.op, "line_reduce");
+        assert_eq!(s.params["require_in_pauses"], false);
+        assert_eq!(
+            s.scope,
+            Scope::Band {
+                f_lo: 725.0,
+                f_hi: 775.0
+            }
+        );
+
+        let s = only_step(route("amplify by 30 dB", None));
+        assert_eq!(
+            (s.op.as_str(), &s.params),
+            ("gain", &json!({"gain_db": 30.0}))
+        );
+        let s = only_step(route("make it quieter by 3 dB", None));
+        assert_eq!(s.params, json!({"gain_db": -3.0}));
+        let s = only_step(route("normalise to -1 dB", None));
+        assert_eq!(s.params, json!({"target_peak_dbfs": -1.0}));
+        let s = only_step(route("reduce the noise by 18 dB", None));
+        assert_eq!(
+            (s.op.as_str(), &s.params),
+            ("noise_reduce", &json!({"reduction_db": 18.0}))
+        );
+        assert_eq!(only_step(route("remove the hum", None)).op, "line_reduce");
+        assert_eq!(
+            only_step(route("remove the DC offset", None)).op,
+            "dc_remove"
+        );
+        // A specific target wins over the whole clean-up.
+        assert_eq!(only_step(route("clean up the hum", None)).op, "line_reduce");
+    }
+
+    #[test]
+    fn here_means_the_selection() {
+        let sel = Selection {
+            time: Some([1.0, 2.0]),
+            area: Some([1.5, 3.0, 700.0, 900.0]),
+        };
+        let s = only_step(route("compress the bangs here", Some(&sel)));
+        assert_eq!(s.op, "spectral_compressor");
+        assert_eq!(s.params["mode"], "transient");
+        assert_eq!(
+            s.scope,
+            Scope::TfPatch {
+                t0: 1.5,
+                t1: 3.0,
+                f_lo: 700.0,
+                f_hi: 900.0
+            }
+        );
+        let s = only_step(route("boost the selection by 6 dB", Some(&sel)));
+        assert_eq!(s.scope, Scope::TimeRange { t0: 1.0, t1: 2.0 });
+        // Without "here", the selection is not used.
+        let s = only_step(route("compress the peaks", Some(&sel)));
+        assert_eq!(s.scope, Scope::Clip);
+    }
+
+    #[test]
+    fn anything_else_goes_to_the_model() {
+        for w in [
+            "the hum is distracting",
+            "make the quiet voice easier to hear",
+            "what is that noise at the start?",
+            "",
+        ] {
+            assert_eq!(route(w, None), Route::Model, "{w}");
+        }
+    }
+}

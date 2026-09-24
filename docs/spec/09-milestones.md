@@ -13,7 +13,19 @@ from M2, because the reference workflow needs them.
 | **M3** | Provenance and reuse, complete | Capture bundles, ratings in the interface, control replay, adaptive-replay refinements, dataset tooling, separation (reconstruction class) | A job's chain replays on a different clip adaptively, with a dry-run diff and a rating recorded, from the interface |
 | **M4** | Local and automated | Local model support, learned starting chains, proposal-first automated clean-up, batch processing with per-file review | A new file receives a proposed chain above the confidence threshold, reviewed before rendering |
 
-**Status (2026-09-24).** M0 is built: the core, the command-line workflow, recipes and dataset
-export, the WebAssembly build and the browser interface, with the tests in `08-testing.md`
-passing. The residual monitor for the whole stack, planned for M1, is already in the M0
-interface.
+**Status (2026-09-24).**
+- M0 is built: the core, the command-line workflow, recipes and dataset export, the
+  WebAssembly build and the browser interface, with the tests in `08-testing.md` passing.
+- M1 is built for typed requests:
+  - the console, with local routing and the model path;
+  - previews with Original / Before / Processed / Residual;
+  - accept, change and reject;
+  - WAV export, undo and ratings;
+  - `nlae ask`.
+
+  Its acceptance runs end to end against a stand-in provider (`08-testing.md`).
+- Still open for M1:
+  - spoken commands (`OPEN:` 16);
+  - a manual run against DeepSeek, which needs the host allowed from the build environment and
+    a key;
+  - whether DeepSeek accepts browser requests (CORS).

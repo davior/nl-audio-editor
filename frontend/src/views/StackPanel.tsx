@@ -29,18 +29,24 @@ export function describe(s: Step): string {
   }
 }
 
-/** The stack, read-only in M0. Steps are added from the command line (the console comes in M1). */
+/** The stack: steps come from the console or the command line; the top step can be undone and the result rated. */
 export function StackPanel({
   state,
   onClone,
   canClone,
   brokenAtLine,
+  onUndo,
+  onRate,
 }: {
   state: StackState;
   onClone: (atStep?: string) => void;
   canClone: boolean;
   /** When the log did not verify: the stack shows only what was recorded before this line. */
   brokenAtLine: number | null;
+  /** Remove the top step (it stays in the log); absent when the project cannot be changed. */
+  onUndo?: () => void;
+  /** Rate the stack as it stands, 1–5. */
+  onRate?: (overall: number) => void;
 }) {
   return (
     <div className="panel" data-testid="stack">
@@ -58,6 +64,25 @@ export function StackPanel({
         </div>
       )}
       {state.steps.length === 0 && brokenAtLine === null && <div className="muted">No steps yet. The original is untouched.</div>}
+      {(onUndo || onRate) && state.steps.length > 0 && (
+        <div className="stack-actions">
+          {onUndo && (
+            <button className="small" onClick={onUndo} data-testid="undo" title="Remove the top step; it stays in the log">
+              Undo last step
+            </button>
+          )}
+          {onRate && (
+            <span className="rate" title="How good is the result? Recorded for learning.">
+              Rate:
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} className="small" onClick={() => onRate(n)} data-testid={`rate-${n}`}>
+                  {n}
+                </button>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
       <ol className="steps">
         {state.steps.map((s) => (
           <li key={s.step_id} data-testid="stack-step" data-op={s.op}>
@@ -78,8 +103,8 @@ export function StackPanel({
               )}
             </div>
             <div className="step-desc">{describe(s)}</div>
-            <div className="step-meta">
-              {s.actor.model ? `${s.actor.model}` : s.actor.kind} via {s.origin}
+            <div className="step-meta" data-testid="step-meta">
+              {s.actor.model ? `${s.actor.model}${s.actor.provider ? ` (${s.actor.provider})` : ""}` : s.actor.kind} via {s.origin}
               {s.intent ? ` — “${s.intent}”` : ""}
             </div>
           </li>

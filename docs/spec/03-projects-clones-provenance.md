@@ -49,8 +49,9 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `project.created` | project id, name |
 | `source.imported` | SHA-256, original filename, size, last-modified time (if known), container, codec, rate, channels, frames, decoder version |
 | `source.recorded` | as above, plus the capture settings the browser actually applied |
-| `analysis.computed` | features version, features hash, summary |
-| `step.previewed` | preview id, candidate step(s), window, window measurements, base stack hash; `kind` = `step` or `plan` |
+| `analysis.computed` | features version, render hash of the source, features hash, summary. Once per features version; it may follow creation later (the browser shows the recording first) |
+| `assistant.exchange` | provider, model, host; the request exactly as sent, its SHA-256 and the prompt version; the response; latency; the problems found, and the exchange it corrects, if any. Actor: the assistant. Never the key |
+| `step.previewed` | preview id, candidate step(s), window, window measurements, base stack hash; `kind` = `step` or `plan`; the recipe it replays or the exchange it came from, if any |
 | `step.modified` | preview id, proposed parameters, changed parameters |
 | `step.accepted` | the full step object |
 | `plan.accepted` | plan id, preview id, the accepted steps, the steps switched off |
@@ -59,7 +60,7 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `step.annotated` | step id, note, labels |
 | `stack.rated` | target (step, plan or stack), overall 1–5, optional dimensions, note |
 | `recipe.saved` / `recipe.replayed` | recipe hash, range, mode, dry-run diff |
-| `render.exported` | stack hash, output hash, format |
+| `render.exported` | file name, format, stack hash (with the final limiter), output hash, limiter measurements, the file's SHA-256 |
 | `dataset.exported` | options, manifest hash |
 | `project.clone_made` | child project id, fork step (in the parent's log) |
 | `project.cloned_from` | parent id, parent head, fork step and its event hash, inherited steps (first event of the clone) |

@@ -2,13 +2,14 @@
 // Everything here is display and control; the core does the audio work.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
-import { core } from "../core/client";
+import { analyseInBackground, core } from "../core/client";
 import type { ProjectSummary, ViewState, Which } from "../core/types";
 import { debug } from "../debug";
 import { sync } from "../storage/sync";
 import { IntegrityBadge } from "./IntegrityBadge";
 import { Spectrogram, TimeAxis, Waveform } from "./Lanes";
 import { LogViewer, type LogFailure } from "./LogViewer";
+import { Console, type PreviewInfo } from "./Console";
 import { StackPanel } from "./StackPanel";
 import { DB_RANGES, fit, follow, restoreView, scroll, showRange, zoom } from "./viewState";
 
@@ -31,14 +32,24 @@ const MONITORS: { which: Which; label: string; title: string }[] = [
   { which: "residual", label: "Residual", title: "What the stack removed, at the level it would have had" },
 ];
 
+// While a proposal is previewed: its window only.
+const PREVIEW_MONITORS: { which: Which; label: string; title: string }[] = [
+  { which: "preview:original", label: "Original", title: "The recording as imported" },
+  { which: "preview:before", label: "Before", title: "The stack as it is, without the proposal" },
+  { which: "preview:output", label: "Processed", title: "With the proposal" },
+  { which: "preview:residual", label: "Residual", title: "What the proposal would remove" },
+];
+
+type ExportFormat = "f32" | "pcm24" | "pcm16";
+
 function fmtTime(t: number): string {
   const m = Math.floor(t / 60);
   const s = t - m * 60;
   return `${m}:${s.toFixed(3).padStart(6, "0")}`;
 }
 
-function download(bytes: Uint8Array, name: string) {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+function download(bytes: Uint8Array, name: string, type = "application/zip") {
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name.replace(/[\\/:*?"<>|]/g, "_");
@@ -71,6 +82,16 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const [width, setWidth] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [renderHash, setRenderHash] = useState<{ which: Which; hash: string } | null>(null);
+  // An open proposal: the lanes and playback show its window.
+  const [preview, setPreview] = useState<PreviewInfo | null>(null);
+  const previewRef = useRef<PreviewInfo | null>(null);
+  previewRef.current = preview;
+  const viewBeforePreview = useRef<ViewState | null>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("f32");
+  // Analysis runs after the lanes appear, in a worker of its own.
+  const [analysis, setAnalysis] = useState<"running" | "done" | "failed" | "not needed">(
+    summary.needsAnalysis && !readOnly ? "running" : "not needed",
+  );
   const lanes = useRef<HTMLDivElement>(null);
   const player = useRef<Player>(new Player());
   const playFrom = useRef(0);
@@ -89,6 +110,40 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   useEffect(() => {
     core.events(id).then(setEvents, onError);
   }, [id, summary, onError]);
+
+  // The lanes come first: the analysis and the playback copy of the audio
+  // wait until the first view has been drawn (or a few seconds, whichever is first).
+  const [lanesReady, setLanesReady] = useState(false);
+  useEffect(() => {
+    const h = setTimeout(() => setLanesReady(true), 3000);
+    return () => clearTimeout(h);
+  }, []);
+
+  const latest = useRef({ onChanged, onError, detached });
+  latest.current = { onChanged, onError, detached };
+  useEffect(() => {
+    debug("analysis", analysis);
+    if (analysis !== "running" || !lanesReady) return;
+    let live = true;
+    (async () => {
+      const started = performance.now();
+      const pcm = await core.pcm(id, "source");
+      const { features, renderHash } = await analyseInBackground(pcm);
+      if (!live) return;
+      const s = await core.recordAnalysis(id, features, renderHash);
+      if (!latest.current.detached) await sync(id, s.manifest);
+      debug("analysisSeconds", (performance.now() - started) / 1000);
+      setAnalysis("done");
+      latest.current.onChanged(s);
+    })().catch((e) => {
+      if (!live) return;
+      setAnalysis("failed");
+      latest.current.onError(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, [analysis, id, lanesReady]);
 
   useEffect(() => {
     debug("project", {
@@ -112,7 +167,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const pendingSave = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveView = useCallback(async () => {
     pendingSave.current = null;
-    const v = viewRef.current;
+    const v = previewRef.current ? viewBeforePreview.current : viewRef.current;
+    if (!v) return;
     await core.setView(id, v);
     if (!detached) await sync(id, m);
     debug("viewSaved", v);
@@ -126,7 +182,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       debug("viewSaved", view);
       return;
     }
-    if (readOnly) return;
+    // The preview's zoom is not kept: the view before it comes back afterwards.
+    if (readOnly || previewRef.current) return;
     if (pendingSave.current) clearTimeout(pendingSave.current);
     pendingSave.current = setTimeout(() => saveView().catch(onError), 300);
   }, [view, readOnly, saveView, onError]);
@@ -144,6 +201,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
 
   // Load what the monitor plays. Playback continues from the same place.
   useEffect(() => {
+    if (!lanesReady) return;
     let live = true;
     const p = player.current;
     const was = p.playing ? p.position() : null;
@@ -151,7 +209,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       .pcm(id, view.monitor)
       .then((pcm) => {
         if (!live) return;
-        p.load(pcm);
+        // Preview audio covers only the preview window.
+        p.load(pcm, view.monitor.startsWith("preview:") ? (previewRef.current?.window[0] ?? 0) : 0);
         debug("monitorLoaded", view.monitor);
         if (was !== null) void p.play(was).then(() => setPlaying(true));
         else setPlaying(false);
@@ -160,7 +219,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     return () => {
       live = false;
     };
-  }, [id, view.monitor, onError]);
+  }, [id, view.monitor, onError, lanesReady, preview]);
 
   useEffect(() => {
     const p = player.current;
@@ -205,6 +264,10 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       setPlayhead(t);
     } else if (loop && selectionSpan) {
       void play(selectionSpan.t0, selectionSpan.t1, true);
+    } else if (previewRef.current) {
+      // A preview plays its window (round and round with Loop on).
+      const [w0, w1] = previewRef.current.window;
+      void play(playhead >= w0 && playhead < w1 - 1e-3 ? playhead : w0, w1, loop);
     } else {
       void play(playhead >= duration - 1e-3 ? 0 : playhead);
     }
@@ -283,6 +346,94 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     }
   };
 
+  const openPreview = (p: PreviewInfo | null, accepted = false) => {
+    player.current.stop();
+    setPlaying(false);
+    if (p) {
+      if (!previewRef.current) viewBeforePreview.current = viewRef.current;
+      previewRef.current = p;
+      setPreview(p);
+      setPlayhead(p.window[0]);
+      setView((v) => ({ ...v, t0: p.window[0], t1: p.window[1], monitor: "preview:output" }));
+    } else if (previewRef.current) {
+      const back = viewBeforePreview.current;
+      viewBeforePreview.current = null;
+      previewRef.current = null;
+      setPreview(null);
+      setView((v) => ({
+        ...v,
+        ...(back ? { t0: back.t0, t1: back.t1 } : {}),
+        monitor: accepted || !back ? "stack" : back.monitor,
+      }));
+    }
+  };
+
+  useEffect(
+    () => debug("preview", preview ? { id: preview.record.preview_id, window: preview.window, steps: preview.record.steps.length } : null),
+    [preview],
+  );
+
+  // "Play the residual" and the like; during a preview, its own monitors.
+  const listen = (which: Which) => {
+    const inPreview: Partial<Record<Which, Which>> = { source: "preview:original", stack: "preview:output", residual: "preview:residual" };
+    update({ monitor: previewRef.current ? (inPreview[which] ?? which) : which });
+  };
+
+  const save = useCallback(() => (detached ? Promise.resolve() : sync(id, m)), [detached, id, m]);
+
+  const act = async (label: string, f: () => Promise<void>) => {
+    setBusy(label);
+    try {
+      await f();
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const undo = () =>
+    act("Removing the last step…", async () => {
+      const s = await core.removeTop(id);
+      await save();
+      onChanged(s);
+    });
+
+  const rate = (overall: number) =>
+    act("Recording the rating…", async () => {
+      const s = await core.rateStack(id, overall);
+      await save();
+      onChanged(s);
+      debug("rated", overall);
+    });
+
+  const exportWav = () =>
+    act("Rendering…", async () => {
+      const bytes = await core.exportWav(id, exportFormat);
+      await save();
+      download(bytes, `${m.project.name}.wav`, "audio/wav");
+      debug("exported", { bytes: bytes.length, format: exportFormat });
+      onChanged(await core.summary(id));
+    });
+
+  const selection =
+    view.selection || view.tfSelection
+      ? {
+          time: view.selection ? ([view.selection.t0, view.selection.t1] as [number, number]) : null,
+          area: view.tfSelection
+            ? ([view.tfSelection.t0, view.tfSelection.t1, view.tfSelection.f_lo, view.tfSelection.f_hi] as [number, number, number, number])
+            : null,
+        }
+      : null;
+
+  const consoleUnavailable = readOnly
+    ? "This project did not verify, so it cannot be changed."
+    : analysis === "running"
+      ? "Waiting for the analysis…"
+      : analysis === "failed"
+        ? "The analysis failed; reopen the project to try again."
+        : null;
+
   const failure: LogFailure | null = "log" in summary.report ? (summary.report.log.first_failure as unknown as LogFailure | null) : null;
 
   const capture = useMemo(() => {
@@ -306,7 +457,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     onSelectTf: (tfSelection: ViewState["tfSelection"]) => update({ tfSelection }),
     onZoom: (factor: number, around: number) => setView((v) => zoom(v, factor, around, duration)),
     onScroll: (dt: number) => setView((v) => scroll(v, dt, duration)),
-    revision: summary.state.steps.length,
+    renderKey: preview ? `preview:${preview.record.preview_id}` : summary.state.stack_hash,
+    onComplete: () => setLanesReady(true),
   };
 
   return (
@@ -329,7 +481,34 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           )}
         </div>
         <div className="head-actions">
+          {analysis === "running" && (
+            <span
+              className="analysing"
+              data-testid="analysing"
+              title="Measuring levels, noise, lines and pauses; the lanes can be used meanwhile"
+            >
+              Analysing…
+            </span>
+          )}
           <IntegrityBadge report={summary.report} events={events.length} />
+          <select
+            value={exportFormat}
+            onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+            data-testid="export-format"
+            title="Sample format of the exported file"
+          >
+            <option value="f32">32-bit float</option>
+            <option value="pcm24">24-bit</option>
+            <option value="pcm16">16-bit</option>
+          </select>
+          <button
+            onClick={exportWav}
+            disabled={!!readOnly || !!busy || !!preview}
+            data-testid="export-wav"
+            title="The stack with the final limiter, as a WAV file (logged with its hashes)"
+          >
+            Export WAV
+          </button>
           <button
             onClick={saveBundle}
             disabled={!!readOnly || !!busy}
@@ -384,7 +563,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           </span>
         </div>
         <div className="group" role="radiogroup" aria-label="Monitor">
-          {MONITORS.map((mo) => (
+          {(preview ? PREVIEW_MONITORS : MONITORS).map((mo) => (
             <button
               key={mo.which}
               className={view.monitor === mo.which ? "on" : ""}
@@ -501,12 +680,25 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
         )}
       </div>
 
+      <Console
+        summary={summary}
+        selection={selection}
+        unavailable={consoleUnavailable}
+        onSummary={onChanged}
+        onListen={listen}
+        onPreview={openPreview}
+        onError={onError}
+        save={save}
+      />
+
       <div className="panels">
         <StackPanel
           state={summary.state}
           onClone={clone}
           canClone={!readOnly && !busy}
           brokenAtLine={failure ? Number(failure.line) : null}
+          onUndo={readOnly || busy || preview ? undefined : undo}
+          onRate={readOnly || busy ? undefined : rate}
         />
         <div className="panel">
           <div className="panel-head">
@@ -541,7 +733,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
                     }
                   }}
                 >
-                  compute ({MONITORS.find((x) => x.which === view.monitor)?.label})
+                  compute ({[...MONITORS, ...PREVIEW_MONITORS].find((x) => x.which === view.monitor)?.label})
                 </button>
               )}
             </dd>

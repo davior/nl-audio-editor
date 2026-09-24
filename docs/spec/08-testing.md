@@ -78,19 +78,22 @@ keys, and no audio unless `--with-audio` is given.
 
 The `level` target was 6 dB. The two synthetic voices overlap in time–frequency (moving pitch
 smears their partials across cells), which caps what per-cell processing can separate at about
-5.5 dB on this material; the target is recorded at 5 dB. Tuning that produced these defaults:
+5.5 dB on this material; the target is recorded at 5 dB (accepted by the product owner,
+2026-09-24; to be checked against real recordings). Tuning that produced these defaults:
 the `transient` reference moved from the median to the upper quartile (speech onsets were
 being treated as transients), and `threshold_db` gained a mode-dependent `auto` default.
 
-**Line detection on a short clip** (`OPEN:` for the product owner): on the 12-second variant
-of clip A (`nlae golden --short`), detection reports the four real lines (50, 100, 150 Hz hum;
-750 and 3,150 Hz) at widths of 5.9–8.8 Hz, present in 100% of segments — and also two voice
-harmonics, 583.7 Hz and 1,861.5 Hz (widths 17.6 and 20.5 Hz, present in 75% and 67% of
-segments), which the built-in recipe then cuts by about 8.8 dB. Both are multiples of a
-~116.5 Hz pitch the synthetic voice holds near phrase ends, lifted by formants. It does not
-happen on the 60-second clips. Proposal: a line must also be present in the speech pauses —
-hum and whines do not stop when people stop talking — before `line_reduce` cuts it
-automatically.
+**Line detection on a short clip** (found 2026-09-24, fixed in `line_reduce` v2 and features
+v2): on the 12-second variant of clip A (`nlae golden --short`), version 1 of the detection
+reported the real lines (50, 100, 150 Hz hum; 750 and 3,150 Hz) at widths of 5.9–8.8 Hz, present
+in 100% of segments — and also two voice harmonics, 583.7 Hz and 1,861.5 Hz (widths 17.6 and
+20.5 Hz, present in 75% and 67% of segments), which the built-in recipe then cut by about 8.8 dB.
+Both are multiples of a ~116.5 Hz pitch the synthetic voice holds near phrase ends, lifted by
+formants. With the pause rule (agreed with the product owner) a line must also stand out in the
+speech pauses; detection now returns exactly 50, 100, 150, 750 and 3,150 Hz on that clip, and a
+synthetic case (a tone that sounds only while "talking", 70% of the time) is rejected while the
+steady line under it is kept (`tonal` and `ops` unit tests). Version 1 still resolves the seven
+lines, so recipes recorded with it replay as they did.
 
 ## Browser end to end (Playwright, headless Chromium, fake microphone)
 
@@ -115,6 +118,35 @@ Worth knowing from scenario 8: Chromium's fake microphone delivered **2 channels
 was requested**. The capture record shows it (requested 1, applied 2), which is the reason the
 applied settings are logged.
 
+### The console (M1)
+
+A stand-in OpenAI-compatible provider is started with the test run (`tests/e2e/mock-model.ts`).
+- It answers from the user's words with tool calls, as a model would.
+- It allows browser requests (CORS) and keeps what it was sent.
+- It is reached at a different origin from the app, so the browser's CORS path is exercised.
+
+The command line also renders its processed fixture to a WAV file, which the export scenario
+compares with the browser's. All pass (2026-09-24, with the M0 scenarios, 16 tests in about
+70 s).
+
+| # | Scenario | Checks |
+|---|---|---|
+| 1 | "clean this recording up" | Handled locally: a four-step plan preview, the same operations as the command line's. The lanes zoom to the preview window and draw the preview audio. "Play the residual" switches to the preview's residual and keeps the proposal open. Accepting gives **the command line's stack hash**, and the view returns. `recipe.replayed` and `plan.accepted` are logged, with the words on every step. The 32-bit float export is **byte-identical to `nlae render`**, and `render.exported` logs the file's SHA-256, stack hash, output hash and limiter measurements, equal to the command line's |
+| 2 | "the hum is distracting" | It goes to the model: `line_reduce`, with the model's explanation and the preview measurements. A value changed before accepting is logged as `step.modified` and used. The logged exchange's request **is exactly what the provider received**, and the preview refers to it. The step's actor is the model and provider; the acceptance is the user's |
+| 3 | Reject with a reason | "cut 3,100 to 3,200 Hz by 12 dB" gives a `band_cut`. The rejection is logged with its reason. The stack and view are unchanged |
+| 4 | Area + "compress the peaks here" | A `spectral_compressor` scoped to the dragged area exactly, with preview measurements, accepted |
+| 5 | Correction and a question | The model first proposes +90 dB. That is refused, the model is asked once to correct itself, and it proposes +6 dB. Both exchanges are logged, the second marked as correcting the first. A question gets a reply in words, and the open proposal is set aside |
+| 6 | Selection, audio and key | *Test connection* reaches the provider. A model-path request scoped to the selection gets that area as its scope. The provider received the key in the header only, and no numeric array longer than 64. The key is **not in any library file, browser storage or the saved bundle** |
+| 7 | Undo and rating | Undo removes the top step, both from the stack panel and by typing "undo"; each is logged as `step.removed`, and the stack hash returns to the empty stack's. A rating is logged as `stack.rated` |
+
+In Rust:
+- the router cases;
+- the request tripwire (sample data refused in the context and in the request);
+- the parser (valid, out of range, unknown, system, plans, questions);
+- a logged exchange: correction, preview link, chain verification after reopening, and the
+  dataset chat record taken from the exchange;
+- `nlae ask`, both locally routed and through a saved model answer.
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the
@@ -128,20 +160,31 @@ control render and its comparison are stored with the capture bundle.
 - Playback starts within 100 ms of pressing play.
 - A 10 s preview of the spectral compressor renders in under 1 s in WebAssembly.
 
-**Measured (2026-09-24, headless Chromium on a 4-core cloud container, 48 kHz mono float WAV):**
+**Measured (2026-09-24, headless Chromium on a 4-core cloud container, 48 kHz mono float WAV).**
+First in M0, then after the loading work in this milestone:
 
-| File | Import → both lanes | Reopen from the library → both lanes |
-|---|---|---|
-| 1 minute | 3.0 s | 1.1 s |
-| 10 minutes | 28.8 s | 8.6 s |
+| File | Import → both lanes | Reopen → both lanes | Analysis (in the background) |
+|---|---|---|---|
+| 1 minute, M0 | 3.0 s | 1.1 s | before the editor opened |
+| 1 minute, now | 0.6 s | 0.6 s | 1.9 s |
+| 10 minutes, M0 | 28.8 s | 8.6 s | before the editor opened |
+| 10 minutes, now | 3.1 s (whole view 5.4 s) | 3.1 s (whole view 5.3 s) | 20.8 s |
 
-The 10-minute target is **not met**. On import, the full analysis (features v1: levels, true peak,
-loudness, tonal lines, quietest region, hum, speech activity) runs before the editor opens; on
-its own it takes 12.5 s natively for this file (1.4 s for one minute). On reopen, the
-recording is read from browser storage, copied into the worker, hashed and decoded, and the
-zoomed-out spectrogram computes every frame so short events are never hidden (2.2 s natively
-for ten minutes). Proposed for M1: draw the lanes first and run the analysis afterwards in a
-second worker (its event is logged when it finishes); keep a max-pooled spectrogram pyramid
-per render so zooming out never recomputes frames; hand the file to the worker without
-copying. At the length of the reference recordings (about a minute) the current times are
-workable.
+What changed:
+- Creating a project no longer analyses it. The browser analyses in a second worker once the
+  lanes are drawn, and the core logs the result after checking it describes its source.
+- Playback and analysis get their copy of the audio after the first view is drawn, not before.
+- Imports are saved to the library in the background. The recording is written straight from
+  the file the user chose, then the project.
+- Renders are borrowed rather than copied for each redraw.
+- Long views arrive in parts, left to right, and finished views are cached.
+- Files are handed to the workers without copying.
+- The file hash is fed in 64 KiB chunks. A WebAssembly engine can only switch to its optimised
+  code between calls, so hashing a 10-minute file in one call took 4.6 s; in chunks it takes
+  about 0.8 s, with the same digest.
+
+For ten minutes, first paint is about the 3 s target. What remains is decoding and hashing
+the file in WebAssembly: about 2.4 s on import and 2.3 s on reopen, when the source hash is
+verified. A warm-up run at start-up made no measurable difference and was dropped. The
+background analysis takes 20.8 s (12.5 s natively); the editor is usable meanwhile, and zooming
+redraws in about 1.5 s while it runs.

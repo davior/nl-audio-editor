@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::analysis::{Features, FEATURES_VERSION};
+use crate::assistant::prompt::{user_message, AssistantContext, SYSTEM_PROMPT};
 use crate::hash::sha256;
 use crate::ops::registry;
 use crate::project::stack::PreviewRecord;
@@ -57,10 +58,6 @@ pub struct Export {
     pub files: BTreeMap<String, Vec<u8>>,
     pub counts: BTreeMap<String, u64>,
 }
-
-const SYSTEM_PROMPT: &str = "You clean up spoken-word and field recordings. Choose operations from the registry and \
-set their parameters from the request and the analysis. Never invent operations. Prefer the smallest change that \
-achieves the goal.";
 
 /// A compact analysis summary: what the assistant would be shown. Numbers only, never audio.
 pub fn analysis_summary(f: &Features) -> Value {
@@ -157,6 +154,10 @@ fn step_record(
     })
 }
 
+/// A chat record for one step, reconstructed with the same prompt builder the
+/// assistant uses: the user's words and the analysis before the step, then the
+/// step as a tool call. Used where no model exchange was logged (manual work,
+/// the command line, locally routed requests).
 fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
     let intent = step.intent.as_ref()?;
     let reg = registry();
@@ -165,16 +166,20 @@ fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
         .ok()?
         .descriptor()
         .tool_schema();
-    let analysis = step
-        .state_before
-        .as_ref()
-        .map(|b| analysis_summary(&b.clip))
-        .unwrap_or(Value::Null);
+    let ctx = AssistantContext {
+        analysis: step
+            .state_before
+            .as_ref()
+            .map(|b| analysis_summary(&b.clip))
+            .unwrap_or(Value::Null),
+        stack: Vec::new(),
+        selection: None,
+    };
     let args = json!({ "params": step.params, "scope": step.scope });
     Some(json!({
         "messages": [
             { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": format!("{intent}\n\nAnalysis: {}", serde_json::to_string(&analysis).unwrap_or_default()) },
+            { "role": "user", "content": user_message(intent, &ctx) },
             { "role": "assistant", "content": step.rationale, "tool_calls": [{
                 "id": format!("call_{}", step.step_id),
                 "type": "function",
@@ -182,8 +187,39 @@ fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
             }] }
         ],
         "tools": [tool],
-        "metadata": { "decision": decision, "project": project, "step_id": step.step_id, "origin": step.origin, "actor": step.actor },
+        "metadata": { "decision": decision, "project": project, "step_id": step.step_id, "origin": step.origin, "actor": step.actor, "source": "reconstructed" },
     }))
+}
+
+/// A chat record from a logged model exchange: exactly what was sent and what
+/// came back, with the decision the user made on it.
+fn exchange_record(
+    exchange: &Value,
+    hash: &str,
+    decision: &str,
+    project: &str,
+    preview: &PreviewRecord,
+) -> Value {
+    let mut messages = exchange["request"]["messages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    messages.push(exchange["response"]["choices"][0]["message"].clone());
+    json!({
+        "messages": messages,
+        "tools": exchange["request"]["tools"],
+        "metadata": {
+            "decision": decision,
+            "project": project,
+            "preview_id": preview.preview_id,
+            "step_ids": preview.steps.iter().map(|s| s.step_id.clone()).collect::<Vec<_>>(),
+            "exchange": hash,
+            "model": exchange["model"],
+            "provider": exchange["provider"],
+            "prompt_version": exchange["prompt_version"],
+            "source": "exchange",
+        },
+    })
 }
 
 fn jsonl(records: &[Value]) -> Vec<u8> {
@@ -216,6 +252,7 @@ pub fn export(
         let mut stack: Vec<Step> = Vec::new();
         let mut open_previews = 0u64;
         let mut per_project = BTreeMap::<&str, u64>::new();
+        let mut exchanges: BTreeMap<String, Value> = BTreeMap::new();
         for ev in &pd.events {
             if ev["type"] == "stack.rated" {
                 ratings.push(json!({ "at": ev["ts"], "by": ev["actor"], "rating": ev["data"] }));
@@ -242,6 +279,9 @@ pub fn export(
                     {
                         stack = s;
                     }
+                }
+                "assistant.exchange" => {
+                    exchanges.insert(ev["hash"].as_str().unwrap_or("").to_string(), data.clone());
                 }
                 "step.previewed" => {
                     if let Ok(p) = serde_json::from_value::<PreviewRecord>(data.clone()) {
@@ -295,6 +335,18 @@ pub fn export(
                     decided.insert(pid.clone());
                     let before = open_previews;
                     open_previews = 0;
+                    let decision = if kind == "step.rejected" {
+                        "rejected"
+                    } else {
+                        "accepted"
+                    };
+                    let from_exchange = p
+                        .exchange
+                        .as_ref()
+                        .and_then(|h| exchanges.get(h).map(|x| (h, x)));
+                    if let Some((h, x)) = from_exchange {
+                        chat_out.push(exchange_record(x, h, decision, &m.project.id, p));
+                    }
                     if kind == "step.rejected" {
                         for s in &p.steps {
                             steps_out.push(step_record(
@@ -308,8 +360,10 @@ pub fn export(
                                 None,
                                 &ops_of(&stack),
                             ));
-                            if let Some(c) = chat_record(s, "rejected", &m.project.id) {
-                                chat_out.push(c);
+                            if from_exchange.is_none() {
+                                if let Some(c) = chat_record(s, "rejected", &m.project.id) {
+                                    chat_out.push(c);
+                                }
                             }
                             bump("rejected");
                         }
@@ -335,8 +389,10 @@ pub fn export(
                             rating_for(s).as_ref(),
                             &ops_of(&stack),
                         ));
-                        if let Some(c) = chat_record(s, "accepted", &m.project.id) {
-                            chat_out.push(c);
+                        if from_exchange.is_none() {
+                            if let Some(c) = chat_record(s, "accepted", &m.project.id) {
+                                chat_out.push(c);
+                            }
                         }
                         bump(if modification.is_some() {
                             "accepted_modified"

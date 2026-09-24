@@ -178,7 +178,10 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
         )
         .unwrap();
     }
-    assert_eq!(ids.len(), 9);
+    // Nine operations; line_reduce has two versions (v1 kept for replays).
+    assert_eq!(ids.len(), 10, "descriptors (operation × version)");
+    ids.dedup();
+    assert_eq!(ids.len(), 9, "operations");
 }
 
 #[test]
@@ -466,4 +469,33 @@ fn spectral_compressor_reduces_the_burst_inside_its_patch_only() {
         tone_change.abs() < 0.01,
         "1 kHz tone outside the patch changed by {tone_change} dB"
     );
+}
+
+#[test]
+fn line_reduce_v1_replays_as_recorded_and_v2_leaves_the_voice_alone() {
+    // The 12 s golden clip: v1 (no pause rule) also cuts two voice harmonics;
+    // v2 cuts only the lines that stand out in the pauses too.
+    let clip = crate::golden::generate(&crate::golden::spec_a_short()).mix;
+    let reg = registry();
+    let lines = |version: u32| -> Vec<i64> {
+        let p = reg
+            .validate("line_reduce", version, &json!({}), &Scope::Clip)
+            .unwrap();
+        let r = reg
+            .get("line_reduce", version)
+            .unwrap()
+            .resolve(&p, &Scope::Clip, &clip)
+            .unwrap();
+        let mut f: Vec<i64> = r["resolved_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["freq_hz"].as_f64().unwrap().round() as i64)
+            .collect();
+        f.sort();
+        f
+    };
+    assert_eq!(lines(1), vec![50, 100, 150, 584, 750, 1861, 3150]);
+    assert_eq!(lines(2), vec![50, 100, 150, 750, 3150]);
+    assert_eq!(reg.latest("line_reduce").unwrap().descriptor().version, 2);
 }

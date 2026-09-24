@@ -35,7 +35,22 @@ pub struct SpectrogramRequest {
 
 /// Returns `rows × columns` levels (0–255), row 0 at the top (highest frequency).
 pub fn spectrogram(audio: &AudioBuffer, req: &SpectrogramRequest) -> Vec<u8> {
-    let cols = req.columns as usize;
+    spectrogram_columns(audio, req, 0, req.columns as usize)
+}
+
+/// Columns `[c0, c1)` of a request: `rows × (c1 − c0)` levels, exactly the
+/// same values as those columns of the whole image (each column is computed
+/// on its own), so a long view can be delivered in parts.
+pub fn spectrogram_columns(
+    audio: &AudioBuffer,
+    req: &SpectrogramRequest,
+    c0: usize,
+    c1: usize,
+) -> Vec<u8> {
+    let all = req.columns as usize;
+    let c1 = c1.min(all);
+    let c0 = c0.min(c1);
+    let cols = c1 - c0;
     let rows = req.rows as usize;
     let mut out = vec![0u8; rows * cols];
     if cols == 0 || rows == 0 || req.t1 <= req.t0 {
@@ -68,10 +83,10 @@ pub fn spectrogram(audio: &AudioBuffer, req: &SpectrogramRequest) -> Vec<u8> {
             }
         })
         .collect();
-    let col_span = (req.t1 - req.t0) / cols as f64;
+    let col_span = (req.t1 - req.t0) / all as f64;
     let mut col_power = vec![0.0f64; bins];
     let range = (req.db_max - req.db_min).max(1e-6);
-    for c in 0..cols {
+    for (i, c) in (c0..c1).enumerate() {
         let a = ((req.t0 + c as f64 * col_span) * sr).floor() as i64;
         let b = (((req.t0 + (c + 1) as f64 * col_span) * sr).floor() as i64).max(a + 1);
         let (mut k0, mut k1) = size.frames_centred_in(a, b);
@@ -100,7 +115,7 @@ pub fn spectrogram(audio: &AudioBuffer, req: &SpectrogramRequest) -> Vec<u8> {
             let v = ((power_to_db(p) - req.db_min) / range * 255.0)
                 .round()
                 .clamp(0.0, 255.0);
-            out[r * cols + c] = v as u8;
+            out[r * cols + i] = v as u8;
         }
     }
     out
@@ -164,5 +179,40 @@ mod tests {
         assert!(brightest == 17 || brightest == 18, "row {brightest}");
         assert!(inferno(0).iter().all(|&v| v < 8));
         assert!(inferno(255)[0] > 240);
+    }
+
+    #[test]
+    fn a_view_delivered_in_parts_equals_the_whole() {
+        let sr = 48000u32;
+        let x: Vec<f32> = (0..sr as usize * 3)
+            .map(|i| {
+                let t = i as f64 / sr as f64;
+                (0.1 * sin(2.0 * PI * 1000.0 * t)
+                    + if (1.0..1.01).contains(&t) { 0.5 } else { 0.0 }) as f32
+            })
+            .collect();
+        let a = AudioBuffer::mono(sr, x);
+        let req = SpectrogramRequest {
+            t0: 0.25,
+            t1: 2.9,
+            columns: 301,
+            rows: 64,
+            f_min: 0.0,
+            f_max: 8000.0,
+            scale: FreqScale::Linear,
+            db_min: -200.0,
+            db_max: 0.0,
+            fft_at_48k: 2048,
+        };
+        let whole = spectrogram(&a, &req);
+        let mut parts = vec![0u8; whole.len()];
+        for (c0, c1) in [(0, 100), (100, 250), (250, 301)] {
+            let p = spectrogram_columns(&a, &req, c0, c1);
+            let w = c1 - c0;
+            for r in 0..64 {
+                parts[r * 301 + c0..r * 301 + c1].copy_from_slice(&p[r * w..(r + 1) * w]);
+            }
+        }
+        assert_eq!(parts, whole);
     }
 }

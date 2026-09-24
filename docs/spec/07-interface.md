@@ -10,8 +10,8 @@ one project is one stack; different streams of work are clones, not layers.
 - **Library** — projects grouped by source, each source's clones shown as a family tree (fork
   step on each branch). Import (file picker or drag-and-drop, WAV or MP3), record, open a
   `.nlae` bundle.
-- **Editor** — the lanes, transport, selection, stack panel, log viewer, integrity badge, and
-  (M1) the console and residual monitor.
+- **Editor** — the lanes, transport, selection, console, stack panel, log viewer, integrity
+  badge and residual monitor.
 
 ## Lanes
 
@@ -36,9 +36,17 @@ rate (the browser resamples only for output).
 
 ## Stack panel
 
-The accepted steps, projected from the log, each with its operation, key values, actor and
-origin, and (M1) toggles for Original / Processed / Residual listening at that step. Plans are
-shown as a group. Rejected attempts are visible in the log viewer, flagged as not applied.
+The accepted steps, projected from the log, each with:
+- its operation and key values;
+- its actor (for the assistant, its model and provider) and origin;
+- the words that asked for it.
+
+Plans are shown as a group. Rejected attempts are visible in the log viewer, flagged as not
+applied.
+
+*Undo last step* removes the top step; the removal is logged and the step stays in the log. A
+1–5 rating of the stack as it stands is logged as `stack.rated`. Listening at an earlier step
+is done by cloning there.
 
 ## Recording
 
@@ -74,6 +82,12 @@ level readout is shown only when the drawn data match the view exactly.
 another project is opened. It is not evidence and is not logged. Saved values are checked when
 restored; anything missing or out of range falls back to the default.
 
+**Loading.**
+- The lanes come first.
+- The analysis (features) runs afterwards in a worker of its own, with an *Analysing…* badge; the core logs it as `analysis.computed` once it has checked it describes the source.
+- Imports are saved to the library in the background (*Saving to the library…*): the recording first, straight from the file, then the project.
+- Long views arrive in parts, and each lane says *computing…* until its view is complete.
+
 **Browser storage (OPFS).** `nlae/projects/<id>/` holds each project's files;
 `nlae/blobs/<sha256>/<original filename>` holds each source recording once, shared by its
 clones. Renders are never stored (they are recomputed and cached in memory). The last open
@@ -108,16 +122,47 @@ browser and compares it with the pinned hashes.
 **Test hooks.** The page publishes its state as `window.__nlae` (project summary, view, saved
 view, playhead, what the lanes drew). End-to-end tests read it; nothing reads it back.
 
-## Console (M1)
+## M1 as built
 
-Typed or spoken requests; the assistant's proposal is shown as a previewable step or plan with
-its explanation; accept, reject, or change values before accepting (recorded as a
-modification).
+**Console.** A panel under the lanes. Say what should happen, in words.
+- Each turn shows whether it was handled here or which model answered it.
+- A proposal is a card:
+  - each operation, its scope and key values;
+  - its measurements over the preview window;
+  - the model's explanation.
+- *change* opens an editor for that step's values, built from the operation's descriptor with
+  its limits. Changed values are recorded as `step.modified` when the proposal is accepted.
+- In a plan, each step can be switched off.
+- *Accept*, or *Reject* with an optional reason; both are logged.
+- A new request (other than one to listen) sets an open proposal aside, undecided; the log
+  keeps it.
+- The console waits for the analysis to finish, and is unavailable on a read-only project.
 
-## Residual monitor
+**Preview mode.** While a proposal is open:
+- The lanes zoom to its window and draw the preview audio.
+- The monitor offers **Original / Before / Processed / Residual** for that window:
+  - Before is the stack without the proposal;
+  - Residual is what the proposal would remove.
+- *Play* plays the window, round and round with *Loop* on.
+- "Play the residual" and the like switch among these.
 
-A three-way switch — **Original / Processed / Residual** — for the whole stack (M0) and for the
-step being previewed (M1).
+When the proposal is accepted, rejected or set aside, the view returns to where it was:
+- after accepting, to the processed stack;
+- otherwise, to the monitor that was on.
+
+The preview's zoom is never saved as the project's view.
+
+**Settings.** Provider preset, address, model, provider name, key, *Remember on this device*,
+and *Test connection* (see `06-reasoning-layer.md`).
+
+**Export WAV.** 32-bit float, 24-bit or 16-bit. It exports the stack with the final limiter and
+is logged as `render.exported` with:
+- the stack hash (with the limiter);
+- the output's render hash;
+- the limiter's measurements;
+- the file's SHA-256.
+
+The file is identical to `nlae render` of the same stack, byte for byte (end-to-end test).
 
 `OPEN:` (10) Is the operation catalogue browsed, searched, or found only conversationally?
 Proposal: searchable list plus conversation; browsing by category later.

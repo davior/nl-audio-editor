@@ -1,0 +1,42 @@
+{
+  // Run and Debug (F5).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Starts the "Dev server" task if it is not running, then opens Chrome with the
+      // debugger attached. Breakpoints work in the TypeScript, including the workers that
+      // run the audio core. The browser keeps its own profile, so its library of projects
+      // is separate from your everyday browser's.
+      "name": "Browser app (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend",
+      "preLaunchTask": "Dev server"
+    },
+    {
+      // The same with Chromium (Arch: sudo pacman -S chromium). Change the path for another build.
+      "name": "Browser app (Chromium)",
+      "type": "chrome",
+      "request": "launch",
+      "runtimeExecutable": "/usr/bin/chromium",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend",
+      "preLaunchTask": "Dev server"
+    },
+    {
+      // Needs the CodeLLDB extension. Edit "args" to run the command you want to step
+      // through, e.g. ["golden", "--short", "target/clips"]. Debug builds of the core are
+      // unoptimised, so use a short clip.
+      "name": "nlae command line",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "-p", "nlae-cli", "--bin", "nlae"],
+        "filter": { "name": "nlae", "kind": "bin" }
+      },
+      "args": ["--help"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

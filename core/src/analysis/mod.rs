@@ -20,7 +20,9 @@ pub use quiet::QuietRegion;
 pub use spectrum::BandStat;
 pub use tonal::{LineConfig, TonalLine};
 
-pub const FEATURES_VERSION: u32 = 1;
+/// Version 2: tonal lines must also stand out in the speech pauses, and carry
+/// their prominence there (`TonalLine::pause_prominence_db`).
+pub const FEATURES_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -173,7 +175,7 @@ mod tests {
             .collect();
         let a = AudioBuffer::mono(sr, x);
         let f = features(&a, None);
-        assert_eq!(f.version, 1);
+        assert_eq!(f.version, FEATURES_VERSION);
         assert!((f.dc_offset[0] - 0.002).abs() < 1e-4);
         let hum = f.hum.clone().expect("hum");
         assert_eq!(hum.fundamental_hz, 50.0);
