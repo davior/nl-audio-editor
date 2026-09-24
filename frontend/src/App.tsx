@@ -195,7 +195,7 @@ export function App() {
     <div className="app">
       <header className="top">
         <h1>
-          nlae <span className="muted">forensic audio editor · M0</span>
+          nlae <span className="muted">forensic audio editor · M1</span>
         </h1>
         {busy && (
           <span className="busy" data-testid="busy">
@@ -233,7 +233,10 @@ export function App() {
             summary={current.summary}
             detached={current.detached}
             notice={current.notice}
-            onChanged={(s) => setCurrent((c) => (c && c.summary.id === s.id ? { ...c, summary: s } : c))}
+            onChanged={(s) => {
+              setCurrent((c) => (c && c.summary.id === s.id ? { ...c, summary: s } : c));
+              void refresh(); // the library shows each project's step count
+            }}
             onOpenClone={(child) => show(child, current.detached, null)}
             onClose={async () => {
               if (flushRef.current) await flushRef.current().catch(onError);

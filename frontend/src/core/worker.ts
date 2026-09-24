@@ -2,9 +2,22 @@
 // The core runs here, off the main thread: decoding, analysis, rendering and
 // every change to a project. The page only draws and plays what comes back.
 import * as Comlink from "comlink";
-import init, { WasmProject, parity, descriptors } from "../core-wasm/nlae.js";
+import init, { WasmProject, parity, descriptors, route, parse_response, correction_request } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
-import type { ProjectSummary, Pcm, Which, SpectrogramReq } from "./types";
+import type {
+  Exchange,
+  Pcm,
+  PreviewRecord,
+  PreviewResult,
+  ProjectSummary,
+  Proposal,
+  Route,
+  RoutedStep,
+  Selection,
+  SpectrogramReq,
+  Turn,
+  Which,
+} from "./types";
 
 const ready = init({ module_or_path: wasmUrl });
 
@@ -108,6 +121,77 @@ const api = {
   },
   async exportBundle(id: string): Promise<Uint8Array> {
     const r = get(id).export_bundle();
+    return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
+  },
+  // --- The console (M1) ---
+  async route(words: string, selection: Selection | null): Promise<Route> {
+    await ready;
+    return route(words, selection);
+  },
+  async parseResponse(response: string): Promise<{ proposal?: Proposal; problems?: string[] }> {
+    await ready;
+    return parse_response(response);
+  },
+  async correctionRequest(request: string, response: string, problems: string[]): Promise<string> {
+    await ready;
+    return correction_request(request, response, problems);
+  },
+  async previewRouted(id: string, steps: RoutedStep[], words: string): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_routed(steps, words) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async previewRecipe(id: string, name: string, words: string): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_recipe(name, words) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async assistantRequest(id: string, model: string, history: Turn[], words: string, selection: Selection | null): Promise<string> {
+    return get(id).assistant_request(model, history, words, selection);
+  },
+  async recordExchange(id: string, exchange: Exchange): Promise<string> {
+    return get(id).record_exchange(exchange);
+  },
+  async previewProposal(
+    id: string,
+    proposal: Proposal,
+    words: string,
+    model: string,
+    provider: string,
+    exchange: string,
+  ): Promise<PreviewResult> {
+    const p = get(id);
+    const r = p.preview_proposal(proposal, words, model, provider, exchange) as { record: PreviewRecord; window: [number, number] };
+    return { ...r, summary: summary(p) };
+  },
+  async accept(
+    id: string,
+    previewId: string,
+    overrides: Record<number, Record<string, unknown>>,
+    disabled: number[],
+    note?: string,
+  ): Promise<ProjectSummary> {
+    const p = get(id);
+    p.accept(previewId, overrides, disabled, note);
+    return summary(p);
+  },
+  async reject(id: string, previewId: string, reason?: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.reject(previewId, reason || undefined);
+    return summary(p);
+  },
+  async removeTop(id: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.remove_top();
+    return summary(p);
+  },
+  async rateStack(id: string, overall: number, note?: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.rate_stack(overall, note || undefined);
+    return summary(p);
+  },
+  async exportWav(id: string, format: "f32" | "pcm24" | "pcm16"): Promise<Uint8Array> {
+    const r = get(id).export_wav(format);
     return Comlink.transfer(r, [r.buffer as ArrayBuffer]);
   },
   async close(id: string): Promise<void> {

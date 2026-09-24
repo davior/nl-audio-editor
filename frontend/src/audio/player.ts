@@ -9,6 +9,8 @@ export class Player {
   private from = 0;
   private to = 0;
   private looping = false;
+  /** Where the loaded audio starts on the recording's time line (a preview window). */
+  private offset = 0;
   playing = false;
   onEnded: (() => void) | null = null;
 
@@ -17,8 +19,11 @@ export class Player {
     return this.ctx;
   }
 
-  load(pcm: Pcm): void {
+  /** Load audio that starts `offset` seconds into the recording (0 for the whole recording). */
+  load(pcm: Pcm, offset = 0): void {
     this.stop();
+    this.offset = offset;
+    this.from = 0;
     const ctx = this.context();
     const len = pcm.channels[0]?.length ?? 0;
     const b = ctx.createBuffer(pcm.channels.length, Math.max(1, len), pcm.sampleRate);
@@ -30,6 +35,7 @@ export class Player {
     return this.buffer?.duration ?? 0;
   }
 
+  /** Play from `from` (to `to`) seconds on the recording's time line. */
   async play(from: number, to?: number, loop = false): Promise<void> {
     if (!this.buffer) return;
     this.stop();
@@ -37,8 +43,9 @@ export class Player {
     await ctx.resume();
     const n = ctx.createBufferSource();
     n.buffer = this.buffer;
-    this.from = Math.max(0, Math.min(from, this.buffer.duration));
-    this.to = Math.min(to ?? this.buffer.duration, this.buffer.duration);
+    const at = Math.max(0, Math.min(from - this.offset, this.buffer.duration));
+    this.from = at;
+    this.to = Math.min(to === undefined ? this.buffer.duration : Math.max(at, to - this.offset), this.buffer.duration);
     this.looping = loop;
     n.loop = loop;
     if (loop) {
@@ -73,12 +80,12 @@ export class Player {
     this.playing = false;
   }
 
-  /** Current position in seconds. */
+  /** Current position in seconds on the recording's time line. */
   position(): number {
-    if (!this.playing || !this.ctx) return this.from;
+    if (!this.playing || !this.ctx) return this.offset + this.from;
     const t = this.ctx.currentTime - this.startedAt;
-    if (!this.looping) return Math.min(this.from + t, this.to);
+    if (!this.looping) return this.offset + Math.min(this.from + t, this.to);
     const span = Math.max(1e-6, this.to - this.from);
-    return this.from + (t % span);
+    return this.offset + this.from + (t % span);
   }
 }

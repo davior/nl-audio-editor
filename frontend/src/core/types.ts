@@ -6,6 +6,13 @@ import type { SpectrogramRequest } from "../../../shared/types/SpectrogramReques
 export type { Manifest, OpenReport, StackState };
 export type { Step } from "../../../shared/types/Step";
 export type { Scope } from "../../../shared/types/Scope";
+export type { PreviewRecord } from "../../../shared/types/PreviewRecord";
+export type { Route } from "../../../shared/types/Route";
+export type { RoutedStep } from "../../../shared/types/RoutedStep";
+export type { Selection } from "../../../shared/types/Selection";
+export type { Turn } from "../../../shared/types/Turn";
+export type { Proposal } from "../../../shared/types/Proposal";
+export type { Exchange } from "../../../shared/types/Exchange";
 
 /** A just-created or cloned project has no open report yet; only a list of problems. */
 export type Report = OpenReport | { problems: string[]; created?: boolean; cloned?: boolean };
@@ -21,7 +28,7 @@ export interface ProjectSummary {
   needsAnalysis: boolean;
 }
 
-export type Which = "source" | "stack" | "residual";
+export type Which = "source" | "stack" | "residual" | "preview:original" | "preview:before" | "preview:output" | "preview:residual";
 
 export interface Pcm {
   sampleRate: number;
@@ -40,4 +47,11 @@ export interface ViewState {
   monitor: Which;
   selection: { t0: number; t1: number } | null;
   tfSelection: { t0: number; t1: number; f_lo: number; f_hi: number } | null;
+}
+
+/** A preview the core has open: its record and window (seconds). */
+export interface PreviewResult {
+  record: import("../../../shared/types/PreviewRecord").PreviewRecord;
+  window: [number, number];
+  summary: ProjectSummary;
 }

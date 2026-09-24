@@ -12,11 +12,17 @@ use nlae_core::analysis::spectrogram::{
     spectrogram as draw, spectrogram_columns, SpectrogramRequest,
 };
 use nlae_core::analysis::{features, peaks::peaks};
+use nlae_core::assistant::{self, Exchange, Proposal, RoutedStep, Selection, Turn};
 use nlae_core::audio::decode;
+use nlae_core::audio::wav::{write_wav, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
-use nlae_core::project::{bundle, CreateOptions, Project};
+use nlae_core::project::{
+    bundle, AcceptOptions, CreateOptions, Origin, Preview, PreviewOptions, Project,
+};
 use nlae_core::provenance::env::{format_rfc3339_ms, ulid};
+use nlae_core::provenance::Actor;
 use nlae_core::provenance::{AppInfo, Env};
+use nlae_core::recipe::{Recipe, ReplayMode};
 use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -157,6 +163,45 @@ pub fn analyse_pcm(sample_rate: u32, channels: js_sys::Array) -> Result<JsValue,
     to_js(&serde_json::json!({ "features": f, "render_hash": audio.render_hash() }))
 }
 
+fn selection_of(v: JsValue) -> Result<Option<Selection>, JsValue> {
+    if v.is_null() || v.is_undefined() {
+        return Ok(None);
+    }
+    serde_wasm_bindgen::from_value(v).map_err(js_err)
+}
+
+/// How a request is handled: `{ route: "recipe" | "steps" | "listen" | "undo" | "model", … }`.
+#[wasm_bindgen]
+pub fn route(words: &str, selection: JsValue) -> Result<JsValue, JsValue> {
+    let sel = selection_of(selection)?;
+    to_js(&assistant::route(words, sel.as_ref()))
+}
+
+/// Check a model's answer: `{ proposal }` or `{ problems }`.
+#[wasm_bindgen]
+pub fn parse_response(response: &str) -> Result<JsValue, JsValue> {
+    let v: Value = serde_json::from_str(response).map_err(js_err)?;
+    match assistant::parse_response(&v) {
+        Ok(p) => to_js(&serde_json::json!({ "proposal": p })),
+        Err(problems) => to_js(&serde_json::json!({ "problems": problems })),
+    }
+}
+
+/// A follow-up request asking the model to correct an answer that could not be used.
+#[wasm_bindgen]
+pub fn correction_request(
+    request: &str,
+    response: &str,
+    problems: JsValue,
+) -> Result<String, JsValue> {
+    let req: Value = serde_json::from_str(request).map_err(js_err)?;
+    let resp: Value = serde_json::from_str(response).map_err(js_err)?;
+    let problems: Vec<String> = serde_wasm_bindgen::from_value(problems).map_err(js_err)?;
+    Ok(assistant::build_correction(&req, &resp, &problems)
+        .map_err(js_err)?
+        .to_string())
+}
+
 /// Native/WebAssembly parity: resolved-chain hash and render hash, plus the pinned values.
 #[wasm_bindgen]
 pub fn parity() -> Result<JsValue, JsValue> {
@@ -172,16 +217,48 @@ pub fn parity() -> Result<JsValue, JsValue> {
 pub struct WasmProject {
     project: Project<TrackingStore>,
     report: Value,
+    /// The open preview's audio, for the preview monitor.
+    preview: Option<Preview>,
 }
 
 impl WasmProject {
     fn new(project: Project<TrackingStore>, report: Value) -> Self {
-        WasmProject { project, report }
+        WasmProject {
+            project,
+            report,
+            preview: None,
+        }
     }
 
-    /// Borrowed: the recording is not copied for every redraw.
+    fn keep_preview(&mut self, pv: Preview) -> Result<JsValue, JsValue> {
+        let out = to_js(&serde_json::json!({ "record": pv.record, "window": pv.record.window }))?;
+        self.preview = Some(pv);
+        Ok(out)
+    }
+
+    /// Borrowed: the recording is not copied for every redraw. The open
+    /// preview's audio is `preview:original|before|output|residual`; it covers
+    /// only the preview window, which starts at the returned offset (seconds).
+    fn audio_at(&mut self, which: &str) -> Result<(&nlae_core::audio::AudioBuffer, f64), JsValue> {
+        if let Some(part) = which.strip_prefix("preview:") {
+            let pv = self
+                .preview
+                .as_ref()
+                .ok_or_else(|| js_err("no preview is open"))?;
+            let a = match part {
+                "original" => &pv.original,
+                "before" => &pv.before,
+                "output" => &pv.output,
+                "residual" => &pv.residual,
+                other => return Err(js_err(format!("unknown preview audio `{other}`"))),
+            };
+            return Ok((a, pv.record.window[0]));
+        }
+        Ok((self.project.audio(which).map_err(js_err)?, 0.0))
+    }
+
     fn audio(&mut self, which: &str) -> Result<&nlae_core::audio::AudioBuffer, JsValue> {
-        self.project.audio(which).map_err(js_err)
+        Ok(self.audio_at(which)?.0)
     }
 
     fn which(&mut self, which: &str) -> Result<nlae_core::audio::AudioBuffer, JsValue> {
@@ -337,17 +414,38 @@ impl WasmProject {
         t1: f64,
         columns: u32,
     ) -> Result<Float32Array, JsValue> {
-        let a = self.audio(which)?;
-        let (s0, s1) = (a.time_to_sample(t0), a.time_to_sample(t1));
-        let p = peaks(a, s0, s1, columns as usize);
+        let (a, offset) = self.audio_at(which)?;
+        let (t0, t1) = (t0 - offset, t1 - offset);
+        let cols = columns as usize;
+        let dur = a.duration_s();
+        let p = if t0 >= 0.0 && t1 <= dur {
+            peaks(a, a.time_to_sample(t0), a.time_to_sample(t1), cols)
+        } else {
+            // The view reaches past the audio (a preview window, zoomed out):
+            // columns keep their place in time, and are empty where there is no audio.
+            let span = (t1 - t0) / cols.max(1) as f64;
+            (0..cols)
+                .map(|c| {
+                    let (c0, c1) = (t0 + c as f64 * span, t0 + (c + 1) as f64 * span);
+                    if c1 <= 0.0 || c0 >= dur {
+                        return (0.0, 0.0);
+                    }
+                    let s0 = a.time_to_sample(c0);
+                    peaks(a, s0, a.time_to_sample(c1).max(s0 + 1), 1)[0]
+                })
+                .collect()
+        };
         let flat: Vec<f32> = p.iter().flat_map(|(lo, hi)| [*lo, *hi]).collect();
         Ok(Float32Array::from(flat.as_slice()))
     }
 
     /// Spectrogram levels (0–255, rows × columns, top row = highest frequency).
     pub fn spectrogram(&mut self, which: &str, request: JsValue) -> Result<Uint8Array, JsValue> {
-        let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
-        let a = self.audio(which)?;
+        let mut req: SpectrogramRequest =
+            serde_wasm_bindgen::from_value(request).map_err(js_err)?;
+        let (a, offset) = self.audio_at(which)?;
+        req.t0 -= offset;
+        req.t1 -= offset;
         Ok(Uint8Array::from(draw(a, &req).as_slice()))
     }
 
@@ -365,11 +463,182 @@ impl WasmProject {
         c0: u32,
         c1: u32,
     ) -> Result<Uint8Array, JsValue> {
-        let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
-        let a = self.audio(which)?;
+        let mut req: SpectrogramRequest =
+            serde_wasm_bindgen::from_value(request).map_err(js_err)?;
+        let (a, offset) = self.audio_at(which)?;
+        req.t0 -= offset;
+        req.t1 -= offset;
         Ok(Uint8Array::from(
             spectrogram_columns(a, &req, c0 as usize, c1 as usize).as_slice(),
         ))
+    }
+
+    /// Preview steps the router made from the user's words.
+    pub fn preview_routed(&mut self, steps: JsValue, words: &str) -> Result<JsValue, JsValue> {
+        let steps: Vec<RoutedStep> = serde_wasm_bindgen::from_value(steps).map_err(js_err)?;
+        let drafts = steps
+            .iter()
+            .map(|s| s.draft(Origin::Console, words))
+            .collect();
+        let pv = self
+            .project
+            .preview(&mut WebEnv, drafts, PreviewOptions::default())
+            .map_err(js_err)?;
+        self.keep_preview(pv)
+    }
+
+    /// Replay a built-in recipe on this recording as one plan, and preview it.
+    pub fn preview_recipe(&mut self, name: &str, words: &str) -> Result<JsValue, JsValue> {
+        let recipe =
+            Recipe::builtin(name).ok_or_else(|| js_err(format!("no built-in recipe `{name}`")))?;
+        let (_, pv) = nlae_core::recipe::preview_replay(
+            &mut self.project,
+            &mut WebEnv,
+            &recipe,
+            ReplayMode::Adaptive,
+            Actor::user(),
+            None,
+            Some(words),
+        )
+        .map_err(js_err)?;
+        self.keep_preview(pv)
+    }
+
+    /// The request body for the model (JSON text). The key is not part of it.
+    pub fn assistant_request(
+        &mut self,
+        model: &str,
+        history: JsValue,
+        words: &str,
+        selection: JsValue,
+    ) -> Result<String, JsValue> {
+        let history: Vec<Turn> = serde_wasm_bindgen::from_value(history).map_err(js_err)?;
+        let sel = selection_of(selection)?;
+        Ok(
+            assistant::request_for(&mut self.project, model, &history, words, sel)
+                .map_err(js_err)?
+                .to_string(),
+        )
+    }
+
+    /// Log an exchange with the model; returns its event hash.
+    pub fn record_exchange(&mut self, exchange: JsValue) -> Result<String, JsValue> {
+        let ex: Exchange = serde_wasm_bindgen::from_value(exchange).map_err(js_err)?;
+        assistant::record_exchange(&mut self.project, &mut WebEnv, &ex).map_err(js_err)
+    }
+
+    /// Preview what the model proposed, linked to the exchange it came from.
+    pub fn preview_proposal(
+        &mut self,
+        proposal: JsValue,
+        words: &str,
+        model: &str,
+        provider: &str,
+        exchange: &str,
+    ) -> Result<JsValue, JsValue> {
+        let p: Proposal = serde_wasm_bindgen::from_value(proposal).map_err(js_err)?;
+        let drafts = p.drafts(&Actor::assistant(model, provider), Origin::Console, words);
+        let opts = PreviewOptions {
+            plan: p.plan,
+            exchange: Some(exchange.to_string()),
+            ..Default::default()
+        };
+        let pv = self
+            .project
+            .preview(&mut WebEnv, drafts, opts)
+            .map_err(js_err)?;
+        self.keep_preview(pv)
+    }
+
+    /// Accept a preview. `overrides` maps a step's index to changed parameters
+    /// (recorded as a modification); `disabled` lists plan steps switched off.
+    pub fn accept(
+        &mut self,
+        preview_id: &str,
+        overrides: JsValue,
+        disabled: JsValue,
+        note: Option<String>,
+    ) -> Result<(), JsValue> {
+        let raw: BTreeMap<String, Value> =
+            serde_wasm_bindgen::from_value(overrides).map_err(js_err)?;
+        let mut changes = BTreeMap::new();
+        for (k, v) in raw {
+            let i: usize = k.parse().map_err(js_err)?;
+            changes.insert(i, v);
+        }
+        let disabled: Vec<usize> = serde_wasm_bindgen::from_value(disabled).map_err(js_err)?;
+        let opts = AcceptOptions {
+            note,
+            overrides: changes,
+            disabled,
+            actor: None,
+        };
+        self.project
+            .accept(&mut WebEnv, preview_id, opts)
+            .map_err(js_err)?;
+        self.preview = None;
+        Ok(())
+    }
+
+    pub fn reject(&mut self, preview_id: &str, reason: Option<String>) -> Result<(), JsValue> {
+        self.project
+            .reject(&mut WebEnv, preview_id, reason, None)
+            .map_err(js_err)?;
+        self.preview = None;
+        Ok(())
+    }
+
+    /// Rate the stack as it stands (1–5), with an optional note.
+    pub fn rate_stack(&mut self, overall: u8, note: Option<String>) -> Result<(), JsValue> {
+        let target = self.project.state().stack_hash.clone();
+        let rating = nlae_core::project::Rating {
+            target_kind: "stack".into(),
+            target,
+            overall,
+            dims: Default::default(),
+            note,
+        };
+        self.project.rate(&mut WebEnv, rating, None).map_err(js_err)
+    }
+
+    /// Remove the top step (it stays in the log).
+    pub fn remove_top(&mut self) -> Result<(), JsValue> {
+        self.project.remove_top(&mut WebEnv, None).map_err(js_err)?;
+        Ok(())
+    }
+
+    /// The stack rendered with the final limiter, as a WAV file (`f32`,
+    /// `pcm24` or `pcm16`). The export is logged with its hashes.
+    pub fn export_wav(&mut self, format: &str) -> Result<Uint8Array, JsValue> {
+        let wav = match format {
+            "f32" => WavFormat::F32,
+            "pcm24" => WavFormat::Pcm24,
+            "pcm16" => WavFormat::Pcm16,
+            f => {
+                return Err(js_err(format!(
+                    "unknown format `{f}` (f32 | pcm24 | pcm16)"
+                )))
+            }
+        };
+        let fin = self.project.render_final().map_err(js_err)?;
+        let bytes = write_wav(&fin.audio, wav);
+        let file = format!("{}.wav", self.project.manifest.project.name);
+        self.project
+            .record(
+                &mut WebEnv,
+                "render.exported",
+                None,
+                serde_json::json!({
+                    "file": file,
+                    "format": format,
+                    "stack_hash": fin.stack_hash,
+                    "output_hash": fin.output_hash,
+                    "limiter": fin.limiter,
+                    "file_sha256": nlae_core::hash::sha256(&bytes),
+                }),
+            )
+            .map_err(js_err)?;
+        Ok(Uint8Array::from(bytes.as_slice()))
     }
 
     pub fn features(&mut self, which: &str) -> Result<JsValue, JsValue> {
