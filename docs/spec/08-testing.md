@@ -118,6 +118,35 @@ Worth knowing from scenario 8: Chromium's fake microphone delivered **2 channels
 was requested**. The capture record shows it (requested 1, applied 2), which is the reason the
 applied settings are logged.
 
+### The console (M1)
+
+A stand-in OpenAI-compatible provider is started with the test run (`tests/e2e/mock-model.ts`).
+- It answers from the user's words with tool calls, as a model would.
+- It allows browser requests (CORS) and keeps what it was sent.
+- It is reached at a different origin from the app, so the browser's CORS path is exercised.
+
+The command line also renders its processed fixture to a WAV file, which the export scenario
+compares with the browser's. All pass (2026-09-24, with the M0 scenarios, 16 tests in about
+70 s).
+
+| # | Scenario | Checks |
+|---|---|---|
+| 1 | "clean this recording up" | Handled locally: a four-step plan preview, the same operations as the command line's. The lanes zoom to the preview window and draw the preview audio. "Play the residual" switches to the preview's residual and keeps the proposal open. Accepting gives **the command line's stack hash**, and the view returns. `recipe.replayed` and `plan.accepted` are logged, with the words on every step. The 32-bit float export is **byte-identical to `nlae render`**, and `render.exported` logs the file's SHA-256, stack hash, output hash and limiter measurements, equal to the command line's |
+| 2 | "the hum is distracting" | It goes to the model: `line_reduce`, with the model's explanation and the preview measurements. A value changed before accepting is logged as `step.modified` and used. The logged exchange's request **is exactly what the provider received**, and the preview refers to it. The step's actor is the model and provider; the acceptance is the user's |
+| 3 | Reject with a reason | "cut 3,100 to 3,200 Hz by 12 dB" gives a `band_cut`. The rejection is logged with its reason. The stack and view are unchanged |
+| 4 | Area + "compress the peaks here" | A `spectral_compressor` scoped to the dragged area exactly, with preview measurements, accepted |
+| 5 | Correction and a question | The model first proposes +90 dB. That is refused, the model is asked once to correct itself, and it proposes +6 dB. Both exchanges are logged, the second marked as correcting the first. A question gets a reply in words, and the open proposal is set aside |
+| 6 | Selection, audio and key | *Test connection* reaches the provider. A model-path request scoped to the selection gets that area as its scope. The provider received the key in the header only, and no numeric array longer than 64. The key is **not in any library file, browser storage or the saved bundle** |
+| 7 | Undo and rating | Undo removes the top step, both from the stack panel and by typing "undo"; each is logged as `step.removed`, and the stack hash returns to the empty stack's. A rating is logged as `stack.rated` |
+
+In Rust:
+- the router cases;
+- the request tripwire (sample data refused in the context and in the request);
+- the parser (valid, out of range, unknown, system, plans, questions);
+- a logged exchange: correction, preview link, chain verification after reopening, and the
+  dataset chat record taken from the exchange;
+- `nlae ask`, both locally routed and through a saved model answer.
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the

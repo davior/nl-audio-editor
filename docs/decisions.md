@@ -39,6 +39,14 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Imports are saved to the library in the background, the recording first and straight from the file** — the editor opens without waiting for storage; a project directory is only written once its recording is stored.
 - **Hashing is fed in 64 KiB chunks** — the same digest; a WebAssembly engine only switches to optimised code between calls, and one long call hashed a 10-minute file 5× slower.
 - **Browser end-to-end tests run against the production build, with fixtures made by the command-line tool** — tests what ships, and proves the two front ends share one record format.
+- **The assistant's logic is in the Rust core; the front ends only send the request** — prompt, routing, validation and logging are then identical in the browser and the command line, and the key stays with whatever sends the request.
+- **Routine requests are routed locally and deterministically** — lower cost and latency, the same answer every time; the model is kept for descriptive or ambiguous requests.
+- **A model answer that cannot be used gets one correction round, then the problems are shown** — a model usually fixes a stated range error at once; more rounds cost time and hide a real misunderstanding.
+- **Accepting is the user's event; the steps keep the assistant as their actor** — both who proposed and who decided are on record.
+- **A new request sets an open proposal aside, undecided, instead of rejecting it** — a rejection is a judgement the user did not make; the log still shows a preview that was never decided.
+- **Exports log the file's SHA-256, from the browser and the command line alike** — an exported file can be matched to its record byte for byte, and the two front ends are shown to produce the same file.
+- **The console tests use a stand-in OpenAI-compatible provider started with the test run** — the model path, CORS included, is tested without a network or a key.
+- **`nlae relay` only if browsers are refused** — CORS for api.deepseek.com could not be checked from the build environment; *Test connection* settles it, and the relay is built only if needed.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations
@@ -60,6 +68,9 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 ## Data, privacy and training
 
 - **AI provider: cloud default (DeepSeek), Ollama local option** — chosen by the product owner; words and analysis numbers only, never audio, enforced by types.
+- **A request with a numeric array longer than 64 entries is refused, before sending and again before logging** — a tripwire behind the types: anything that long is data, not a description.
+- **Every model exchange is logged in full (`assistant.exchange`), and previews refer to it** — the training record is exactly what was sent and what came back, not a reconstruction.
+- **The key is held in memory unless "remember on this device" is ticked, and travels only in the request header** — a key is not evidence and must never reach a project, log, bundle or export; the tests look for it in all of them.
 - **Everything is recorded, always** — previews, tweaks, rejections, modifications, manual work; the richest training signal.
 - [5] **Rejected attempts included in dataset exports, flagged** — they show what a person judged wrong.
 - [12] **Manual work included in exports by default** — the product owner's own local tool; exporting is an explicit act.
@@ -68,6 +79,6 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - [7] **Recipes are portable, versioned JSON files, also kept in a local library** — needed for reuse across clips and machines.
 - [2] **A bundle embeds the source; clones in the local library share one stored copy** — self-contained sharing without duplicating audio locally.
 - [3] **MP3 decoding yes; MP3 export deferred** — decoding is needed for the material; export licensing can wait, WAV is the evidential format.
-- [16] **Speech-to-text deferred to M1; prefer a local engine** — Chrome's Web Speech API sends voice to a cloud service.
+- [16] **Speech-to-text deferred; the M1 console is typed; prefer a local engine** — Chrome's Web Speech API sends voice to a cloud service.
 - [17] **Single-clip product** — multitrack is out of scope for the first build.
 - [20] **Provisional performance targets** — 10-minute file shows both lanes < 3 s; playback < 100 ms; 10 s compressor preview < 1 s in WebAssembly.

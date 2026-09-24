@@ -1,10 +1,12 @@
 // Builds the fixtures with the command-line tool: a short golden clip, a
-// project processed with the built-in recipe and packed as a bundle, and a
-// copy of that bundle with one logged value changed.
+// project processed with the built-in recipe and packed as a bundle (and
+// rendered to a WAV file), and a copy of that bundle with one logged value
+// changed. Starts the stand-in model provider for the console tests.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { startMockModel } from "./mock-model";
 import { FIX, REPO } from "./paths";
 import { patchStoredEntry } from "./zip";
 
@@ -17,6 +19,8 @@ export interface Fixtures {
   cliSteps: string[];
   cliStepStackHashes: string[];
   cliOutputHash: string;
+  /** The command line's 32-bit float WAV render of that stack, as it logged it (`render.exported`). */
+  cliRender: { stack_hash: string; output_hash: string; file_sha256: string; limiter: Record<string, number> };
   tamperedBundle: string;
   tamperedLine: number;
   tamperedSeq: number;
@@ -41,7 +45,7 @@ function objectsWith(v: Json, keys: string[], out: Record<string, Json>[] = []):
   return out;
 }
 
-export default function globalSetup() {
+export default async function globalSetup() {
   rmSync(FIX, { recursive: true, force: true });
   mkdirSync(FIX, { recursive: true });
   const bin = binary();
@@ -55,6 +59,8 @@ export default function globalSetup() {
   if (!preview) throw new Error(`no preview id in:\n${plan}`);
   nlae("accept", "cli-case", preview, "--note", "accepted from the command line");
   nlae("pack", "cli-case", "-o", "cli-case.nlae");
+  // After packing: the render is logged, and the bundle stays as it was.
+  nlae("render", "cli-case", "-o", "cli-case.wav", "--format", "f32");
 
   const manifest = JSON.parse(readFileSync(join(FIX, "cli-case", "manifest.json"), "utf8"));
   const events: Json[] = readFileSync(join(FIX, "cli-case", "events.jsonl"), "utf8")
@@ -77,6 +83,16 @@ export default function globalSetup() {
   });
   writeFileSync(join(FIX, "cli-case-tampered.nlae"), tampered);
 
+  const renderEvent = readFileSync(join(FIX, "cli-case", "events.jsonl"), "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((l) => JSON.parse(l))
+    .find((e) => e.type === "render.exported");
+  const fileSha = `sha256:${createHash("sha256")
+    .update(readFileSync(join(FIX, "cli-case.wav")))
+    .digest("hex")}`;
+  if (renderEvent?.data.file_sha256 !== fileSha) throw new Error("the command line's render log does not match its file");
+
   const fx: Fixtures = {
     wav,
     sourceSha: `sha256:${createHash("sha256").update(readFileSync(wav)).digest("hex")}`,
@@ -86,9 +102,13 @@ export default function globalSetup() {
     cliSteps: steps.map((s) => s.op as string),
     cliStepStackHashes: steps.map((s) => s.stack_hash as string),
     cliOutputHash: last.output_hash as string,
+    cliRender: renderEvent.data as Fixtures["cliRender"],
     tamperedBundle: join(FIX, "cli-case-tampered.nlae"),
     tamperedLine,
     tamperedSeq: tamperedLine - 1,
   };
   writeFileSync(join(FIX, "fixtures.json"), JSON.stringify(fx, null, 2));
+
+  const mock = await startMockModel();
+  return () => new Promise<void>((resolve) => mock.close(() => resolve()));
 }

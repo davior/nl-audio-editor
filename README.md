@@ -28,8 +28,10 @@ a different stream of editing.
 cargo build --release -p nlae-cli          # → target/release/nlae
 nlae golden --short out/                   # a 12 s synthetic test clip (omit --short for the full set)
 nlae new out/golden_a_short.wav -o case    # a project: the source is stored byte for byte
+nlae ask case "clean this recording up"    # routine requests are handled locally…
+nlae ask case "the hum is distracting"     # …the rest go to the model (DEEPSEEK_API_KEY; --provider ollama)
 nlae plan case --recipe builtin:spoken-word-cleanup --out p.wav --residual r.wav
-nlae accept case <preview-id>              # commit the plan (ids are printed by `plan`)
+nlae accept case <preview-id>              # commit a preview (ids are printed by `ask` and `plan`)
 nlae stack case                            # the stack, with what each step measured
 nlae clone case --at <step-id> -o case-b   # follow another stream of editing
 nlae render case -o cleaned.wav            # the stack, with the final limiter
@@ -54,11 +56,18 @@ pnpm dev           # http://localhost:5173
 Import or record a recording, or open a `.nlae` bundle (for example one made with
 `nlae pack`). Projects are kept in the browser's private storage.
 
+Say what should happen in the console under the lanes: "clean this recording up", "cut 3,100
+to 3,200 Hz by 12 dB", or, with an area selected on the spectrogram, "compress the bangs here".
+Each proposal is previewed on a short window (Original / Before / Processed / Residual) and
+waits for *Accept* or *Reject*. Requests that need the model go to the provider chosen in the
+console's settings (DeepSeek by default, or Ollama) with your words and analysis numbers only,
+never audio; the key stays in the browser and is never written to a project.
+
 ## Tests
 
 ```sh
 cargo test --workspace                     # core and command line
 wasm-pack test --node wasm                 # the WebAssembly build computes the native hashes
 cd frontend && pnpm test                   # unit tests
-pnpm build && pnpm e2e                     # the interface end to end in Chromium
+pnpm build && pnpm e2e                     # the interface end to end in Chromium (with a stand-in model)
 ```
