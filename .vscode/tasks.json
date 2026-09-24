@@ -1,0 +1,42 @@
+{
+  // Terminal → Run Task…. Each runs in frontend/.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build the core for the browser",
+      "detail": "pnpm run wasm: run again after changing Rust code in core/ or wasm/",
+      "type": "shell",
+      "command": "pnpm run wasm",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev server",
+      "detail": "pnpm dev on http://localhost:5173 (builds the core first if it has never been built)",
+      "type": "shell",
+      "command": "(test -f src/core-wasm/nlae.js || pnpm run wasm) && pnpm dev",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "isBackground": true,
+      // Lets a debug launch wait until Vite prints its address.
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": { "activeBegins": true, "beginsPattern": "VITE v", "endsPattern": "Local:\\s+http" }
+      }
+    },
+    {
+      "label": "Production preview",
+      "detail": "pnpm build, then serve it on http://localhost:4173 (what the end-to-end tests run against)",
+      "type": "shell",
+      "command": "pnpm build && pnpm preview",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": { "activeBegins": true, "beginsPattern": "vite build|VITE v", "endsPattern": "Local:\\s+http" }
+      }
+    }
+  ]
+}
