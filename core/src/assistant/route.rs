@@ -91,13 +91,66 @@ impl RoutedStep {
 enum Unit {
     Hz,
     Db,
+    /// Time, scaled to seconds.
+    Seconds,
     None,
+}
+
+/// "1:20" → "80 s", "1:02:03.5" → "3723.5 s": clock times become seconds.
+fn clock_times(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let starts = chars[i].is_ascii_digit() && (i == 0 || !chars[i - 1].is_ascii_alphanumeric());
+        if starts {
+            // Parts separated by ':' with two digits after each colon.
+            let mut j = i;
+            let mut parts: Vec<String> = Vec::new();
+            let mut cur = String::new();
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                cur.push(chars[j]);
+                j += 1;
+            }
+            parts.push(cur);
+            while chars.get(j) == Some(&':')
+                && chars.get(j + 1).is_some_and(|c| c.is_ascii_digit())
+                && chars.get(j + 2).is_some_and(|c| c.is_ascii_digit())
+                && !chars.get(j + 3).is_some_and(|c| c.is_ascii_digit())
+            {
+                parts.push(chars[j + 1..j + 3].iter().collect());
+                j += 3;
+            }
+            if parts.len() >= 2 && parts.len() <= 3 {
+                let mut frac = String::new();
+                if chars.get(j) == Some(&'.')
+                    && chars.get(j + 1).is_some_and(|c| c.is_ascii_digit())
+                {
+                    frac.push('.');
+                    j += 1;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        frac.push(chars[j]);
+                        j += 1;
+                    }
+                }
+                let total = parts
+                    .iter()
+                    .fold(0.0, |acc, p| acc * 60.0 + p.parse::<f64>().unwrap_or(0.0))
+                    + format!("0{frac}").parse::<f64>().unwrap_or(0.0);
+                out.push_str(&format!("{total} s"));
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Lower case, dashes as "to", thousands separators removed, spacing collapsed.
 fn normalise(words: &str) -> String {
-    let lower = words
-        .to_lowercase()
+    let lower = clock_times(&words.to_lowercase())
         .replace(['–', '—'], " to ")
         .replace("dbfs", "db")
         .replace("decibels", "db")
@@ -151,12 +204,28 @@ fn numbers(text: &str) -> Vec<(f64, Unit, f64)> {
         };
         let rest: String = chars[i..].iter().collect();
         let rest = rest.trim_start();
+        // A unit word must end there: "2 s" and "2 seconds", not "2 steps".
+        let word = |w: &str| {
+            rest.starts_with(w) && !rest[w.len()..].starts_with(|c: char| c.is_alphabetic())
+        };
         let (unit, scale) = if rest.starts_with("khz") || rest.starts_with("k ") || rest == "k" {
             (Unit::Hz, 1000.0)
         } else if rest.starts_with("hz") {
             (Unit::Hz, 1.0)
         } else if rest.starts_with("db") {
             (Unit::Db, 1.0)
+        } else if ["ms", "msec", "millisecond", "milliseconds"]
+            .iter()
+            .any(|w| word(w))
+        {
+            (Unit::Seconds, 0.001)
+        } else if ["s", "sec", "secs", "second", "seconds"]
+            .iter()
+            .any(|w| word(w))
+        {
+            (Unit::Seconds, 1.0)
+        } else if ["min", "mins", "minute", "minutes"].iter().any(|w| word(w)) {
+            (Unit::Seconds, 60.0)
         } else {
             (Unit::None, 1.0)
         };
@@ -181,6 +250,120 @@ fn frequencies(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
         }
     }
     f
+}
+
+/// Times in seconds: numbers marked as times, and unmarked numbers in a range
+/// written "X to Y seconds" (the unit written once applies to both).
+fn seconds(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
+    let mut f = Vec::new();
+    for (i, &(v, u, scale)) in nums.iter().enumerate() {
+        match (u, nums.get(i + 1)) {
+            (Unit::Seconds, _) => f.push(v * scale),
+            (Unit::None, Some(&(_, Unit::Seconds, next_scale))) => f.push(v * next_scale),
+            _ => {}
+        }
+    }
+    f
+}
+
+/// Words naming something to process rather than a stretch of time.
+const TARGETS: &[&str] = &[
+    "hum", "noise", "hiss", "line", "whine", "tone", "whistle", "click", "bang", "knock", "thump",
+    "peak", "band", "frequen", "hz", "dc", "bass", "treble", "rumble", "voice", "speech", "echo",
+    "reverb", "level", "loud",
+];
+
+/// A removal or an inserted silence, if the words ask for one.
+fn time_edit(t: &str, nums: &[(f64, Unit, f64)], selection: Option<&Selection>) -> Option<Route> {
+    let secs = seconds(nums);
+    let removing = has_any(
+        t,
+        &[
+            "remove",
+            "cut",
+            "delete",
+            "drop",
+            "take out",
+            "trim",
+            "edit out",
+            "get rid of",
+        ],
+    );
+    let inserting = has_any(t, &["insert", "add", "put in", "pad"])
+        && has_any(t, &["silence", "gap", "pause", "blank"]);
+    let this_part = has_any(
+        t,
+        &[
+            " here",
+            "this part",
+            "this bit",
+            "this section",
+            "this stretch",
+            "selection",
+            "selected",
+        ],
+    );
+    let names_a_target = has_any(t, TARGETS);
+    let removal = |t0: f64, t1: f64| {
+        let (t0, t1) = (t0.min(t1), t0.max(t1));
+        let scope = Scope::TimeRange { t0, t1 };
+        step(
+            "remove_time",
+            json!({}),
+            scope,
+            format!(
+                "Remove {t0:.3}–{t1:.3} s of the original from the output ({:.3} s); processing still covers it.",
+                t1 - t0
+            ),
+        )
+    };
+    if removing && !inserting {
+        if secs.len() >= 2 && (t.contains(" to ") || t.contains(" and ")) {
+            return Some(removal(secs[0], secs[1]));
+        }
+        if secs.len() == 1 && has_any(t, &["first "]) {
+            return Some(removal(0.0, secs[0]));
+        }
+        if secs.is_empty() && this_part && !names_a_target {
+            if let Some(Scope::TimeRange { t0, t1 }) = selection.and_then(Selection::time_scope) {
+                return Some(removal(t0, t1));
+            }
+        }
+        return None;
+    }
+    if inserting {
+        // "insert 2 s of silence at 30 s": the length before "at", the point after it.
+        let (len_part, at_part) = match t.find(" at ") {
+            Some(i) => (&t[..i], Some(&t[i + 4..])),
+            None => (t, None),
+        };
+        let len = seconds(&numbers(len_part)).first().copied()?;
+        let at = match at_part {
+            Some(a) if has_any(a, &["start", "beginning"]) => Some(0.0),
+            Some(a) => numbers(a).first().map(
+                |&(v, u, scale)| {
+                    if u == Unit::Seconds {
+                        v * scale
+                    } else {
+                        v
+                    }
+                },
+            ),
+            None if has_any(t, &["start", "beginning"]) => Some(0.0),
+            None if this_part => selection
+                .and_then(Selection::time_scope)
+                .and_then(|s| s.time())
+                .map(|(t0, _)| t0),
+            None => None,
+        }?;
+        return Some(step(
+            "insert_silence",
+            json!({ "at_s": at, "duration_s": len }),
+            Scope::Clip,
+            format!("Insert {len:.3} s of silence at {at:.3} s of the original."),
+        ));
+    }
+    None
 }
 
 fn decibels(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
@@ -260,6 +443,10 @@ pub fn route(words: &str, selection: Option<&Selection>) -> Route {
                 which: "stack".into(),
             };
         }
+    }
+
+    if let Some(r) = time_edit(&t, &nums, selection) {
+        return r;
     }
 
     if t == "undo"
@@ -592,6 +779,69 @@ mod tests {
         // Without "here", the selection is not used.
         let s = only_step(route("compress the peaks", Some(&sel)));
         assert_eq!(s.scope, Scope::Clip);
+    }
+
+    #[test]
+    fn time_edits_by_their_numbers_or_the_selection() {
+        let r = |w: &str| only_step(route(w, None));
+        let s = r("remove 12 to 15.5 seconds");
+        assert_eq!(
+            (s.op.as_str(), s.scope.clone()),
+            ("remove_time", Scope::TimeRange { t0: 12.0, t1: 15.5 })
+        );
+        assert_eq!(
+            r("cut from 1:20 to 1:35").scope,
+            Scope::TimeRange { t0: 80.0, t1: 95.0 }
+        );
+        assert_eq!(
+            r("delete between 2 s and 2500 ms").scope,
+            Scope::TimeRange { t0: 2.0, t1: 2.5 }
+        );
+        assert_eq!(
+            r("trim the first 5 seconds").scope,
+            Scope::TimeRange { t0: 0.0, t1: 5.0 }
+        );
+
+        let s = r("insert 2 seconds of silence at 30 s");
+        assert_eq!(s.op, "insert_silence");
+        assert_eq!(s.params, json!({ "at_s": 30.0, "duration_s": 2.0 }));
+        assert_eq!(
+            r("add a 500 ms gap at 1:05").params,
+            json!({ "at_s": 65.0, "duration_s": 0.5 })
+        );
+        assert_eq!(r("pad 2 s of silence at the start").params["at_s"], 0.0);
+
+        let sel = Selection {
+            time: Some([2.0, 3.0]),
+            area: None,
+        };
+        let s = only_step(route("remove this part", Some(&sel)));
+        assert_eq!(
+            (s.op.as_str(), s.scope),
+            ("remove_time", Scope::TimeRange { t0: 2.0, t1: 3.0 })
+        );
+        assert_eq!(
+            only_step(route("cut the selection out", Some(&sel))).op,
+            "remove_time"
+        );
+        let s = only_step(route("add 1 s of silence here", Some(&sel)));
+        assert_eq!(s.params, json!({ "at_s": 2.0, "duration_s": 1.0 }));
+
+        // Naming something to process is processing, not a cut in time.
+        assert_eq!(
+            only_step(route("remove the hum here", Some(&sel))).op,
+            "line_reduce"
+        );
+        assert_eq!(r("cut 3,100 to 3,200 Hz by 12 dB").op, "band_cut");
+        assert_eq!(r("remove the 750 Hz line").op, "line_reduce");
+        // Not enough to go on: the model decides.
+        for w in [
+            "insert some silence",
+            "remove the last 3 seconds",
+            "cut this part",
+        ] {
+            assert_eq!(route(w, None), Route::Model, "{w}");
+        }
     }
 
     #[test]

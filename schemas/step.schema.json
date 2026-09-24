@@ -19,7 +19,7 @@
     "intent": { "type": "string" },
     "rationale": { "type": "string" },
     "note": { "type": "string" },
-    "class": { "enum": ["analysis", "corrective", "attenuative", "reconstruction", "creative", "safety"] },
+    "class": { "enum": ["analysis", "corrective", "attenuative", "reconstruction", "creative", "safety", "edit"] },
     "label": { "type": "string" },
     "state_before": { "$ref": "#/$defs/state" },
     "state_after": { "$ref": "#/$defs/state" },

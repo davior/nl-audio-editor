@@ -14,7 +14,7 @@ use nlae_core::analysis::spectrogram::{
 use nlae_core::analysis::{features, peaks::peaks};
 use nlae_core::assistant::{self, Exchange, Proposal, RoutedStep, Selection, Turn};
 use nlae_core::audio::decode;
-use nlae_core::audio::wav::{write_wav, WavFormat};
+use nlae_core::audio::wav::{write_wav_with_cues, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
 use nlae_core::project::{
     bundle, AcceptOptions, CreateOptions, Origin, Preview, PreviewOptions, Project,
@@ -400,7 +400,8 @@ impl WasmProject {
         )
     }
 
-    /// Decoded audio (planar Float32Arrays): `source`, `stack` or `residual`.
+    /// Decoded audio (planar Float32Arrays): `source`, `stack`, `output` (the
+    /// stack with its time edits) or `residual`.
     pub fn pcm(&mut self, which: &str) -> Result<JsValue, JsValue> {
         let a = self.audio(which)?;
         planar(a)
@@ -601,6 +602,16 @@ impl WasmProject {
         self.project.rate(&mut WebEnv, rating, None).map_err(js_err)
     }
 
+    /// How the stack's time edits lay the original out in the output (seconds).
+    pub fn edit_map(&self) -> Result<JsValue, JsValue> {
+        to_js(
+            &self
+                .project
+                .edit_layout()
+                .map_json(self.project.source.sample_rate),
+        )
+    }
+
     /// Remove the top step (it stays in the log).
     pub fn remove_top(&mut self) -> Result<(), JsValue> {
         self.project.remove_top(&mut WebEnv, None).map_err(js_err)?;
@@ -621,7 +632,7 @@ impl WasmProject {
             }
         };
         let fin = self.project.render_final().map_err(js_err)?;
-        let bytes = write_wav(&fin.audio, wav);
+        let bytes = write_wav_with_cues(&fin.audio, wav, &fin.cues);
         let file = format!("{}.wav", self.project.manifest.project.name);
         self.project
             .record(
@@ -635,6 +646,8 @@ impl WasmProject {
                     "output_hash": fin.output_hash,
                     "limiter": fin.limiter,
                     "file_sha256": nlae_core::hash::sha256(&bytes),
+                    "duration_s": fin.audio.duration_s(),
+                    "edits": fin.edits,
                 }),
             )
             .map_err(js_err)?;

@@ -557,3 +557,136 @@ fn borrowed_renders_are_the_renders() {
     assert_eq!(p.audio("source").unwrap(), &source);
     assert!(p.audio("other").is_err());
 }
+
+fn preview_one(p: &mut Project<MemStore>, env: &mut FixedEnv, d: StepDraft) -> Preview {
+    p.preview(env, vec![d], PreviewOptions::default()).unwrap()
+}
+
+#[test]
+fn time_edits_shape_the_output_and_leave_the_processing_alone() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let sr = p.source.sample_rate as usize;
+    let len = p.source.len();
+    let fade = sr * 5 / 1000;
+    let processed = p.current_render().unwrap();
+
+    // Remove 2–3 s: the preview shows the join, and what goes, where it was.
+    let pv = preview_one(
+        &mut p,
+        &mut env,
+        draft(
+            "remove_time",
+            json!({}),
+            Scope::TimeRange { t0: 2.0, t1: 3.0 },
+        ),
+    );
+    assert_eq!(pv.record.window, [0.0, 6.0]);
+    assert_eq!(pv.before.len() - pv.output.len(), sr);
+    let r = &pv.residual.channels[0];
+    assert!(r[..2 * sr].iter().all(|&x| x == 0.0) && r[3 * sr..].iter().all(|&x| x == 0.0));
+    assert_eq!(&r[2 * sr..3 * sr], &pv.before.channels[0][2 * sr..3 * sr]);
+    let m = &pv.record.steps[0].measurements;
+    assert_eq!(m["removed_s"], 1.0);
+    assert_eq!(m["output_duration_s"], json!((len - sr) as f64 / sr as f64));
+    p.accept(&mut env, &pv.record.preview_id, AcceptOptions::default())
+        .unwrap();
+
+    // Insert 0.5 s of silence at 6 s of the original.
+    let pv = preview_one(
+        &mut p,
+        &mut env,
+        draft(
+            "insert_silence",
+            json!({ "at_s": 6.0, "duration_s": 0.5 }),
+            Scope::Clip,
+        ),
+    );
+    assert_eq!(pv.output.len() - pv.before.len(), sr / 2);
+    p.accept(&mut env, &pv.record.preview_id, AcceptOptions::default())
+        .unwrap();
+    assert_eq!(p.state().steps[1].class, crate::ops::OpClass::Edit);
+
+    // Processing never sees the edits.
+    assert_eq!(
+        p.current_render().unwrap().render_hash(),
+        processed.render_hash()
+    );
+    // The output: the original up to the fade before the join, exactly; after
+    // it, the original from 3 s on; then the silence where 6 s of the original was.
+    let out = p.audio("output").unwrap().clone();
+    assert_eq!(out.len(), len - sr + sr / 2);
+    let (o, src) = (&out.channels[0], &processed.channels[0]);
+    assert_eq!(&o[..2 * sr - fade], &src[..2 * sr - fade]);
+    assert_eq!(
+        &o[2 * sr + fade..5 * sr - fade],
+        &src[3 * sr + fade..6 * sr - fade]
+    );
+    assert!(o[5 * sr..5 * sr + sr / 2].iter().all(|&x| x == 0.0));
+    assert_eq!(&o[5 * sr + sr / 2 + fade..], &src[6 * sr + fade..]);
+
+    // The export ends with the limiter and says where the edits are.
+    let fin = p.render_final().unwrap();
+    assert_eq!(fin.audio.len(), out.len());
+    assert_eq!(
+        fin.cues,
+        vec![
+            (
+                2 * sr as u32,
+                "removed 2.000-3.000 s of the original (1.000 s)".to_string()
+            ),
+            (
+                5 * sr as u32,
+                "inserted 0.500 s of silence at 6.000 s of the original".to_string()
+            ),
+        ]
+    );
+    assert_eq!(fin.edits[1]["kind"], "inserted");
+    assert_eq!(fin.edits[1]["at_output_s"], 5.0);
+
+    // Reopened, the log verifies and gives the same output.
+    let (mut q, report) = reopen(&p);
+    assert!(report.ok(), "{:?}", report.problems);
+    assert_eq!(q.edit_layout(), p.edit_layout());
+    assert_eq!(q.render_final().unwrap().output_hash, fin.output_hash);
+
+    // Undo takes the silence out again; recipes leave time edits out.
+    p.remove_top(&mut env, None).unwrap();
+    assert_eq!(p.render_final().unwrap().audio.len(), len - sr);
+    assert!(crate::recipe::Recipe::from_project(&p, "cut", 0, 0).is_err());
+}
+
+#[test]
+fn a_time_edit_is_previewed_alone_and_inside_the_recording() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let plan = vec![
+        draft("gain", json!({ "gain_db": 3 }), Scope::Clip),
+        draft(
+            "remove_time",
+            json!({}),
+            Scope::TimeRange { t0: 1.0, t1: 2.0 },
+        ),
+    ];
+    let e = p
+        .preview(&mut env, plan, PreviewOptions::default())
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("on its own"), "{e}");
+    let late = draft(
+        "insert_silence",
+        json!({ "at_s": 100.0, "duration_s": 1.0 }),
+        Scope::Clip,
+    );
+    let e = p
+        .preview(&mut env, vec![late], PreviewOptions::default())
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("after the end"), "{e}");
+    let missing = draft("insert_silence", json!({ "duration_s": 1.0 }), Scope::Clip);
+    let e = p
+        .preview(&mut env, vec![missing], PreviewOptions::default())
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("at_s"), "{e}");
+}

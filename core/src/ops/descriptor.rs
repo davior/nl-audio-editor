@@ -21,6 +21,9 @@ pub enum OpClass {
     Reconstruction,
     Creative,
     Safety,
+    /// Changes the timeline (removes time, inserts silence); applied to the
+    /// output after all processing, never to what processing sees.
+    Edit,
 }
 
 impl OpClass {
@@ -29,6 +32,7 @@ impl OpClass {
         match self {
             OpClass::Analysis => "analysis",
             OpClass::Reconstruction => "reconstruction (processed, not factual)",
+            OpClass::Edit => "edited (time removed or inserted)",
             _ => "processed",
         }
     }

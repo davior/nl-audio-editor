@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use nlae_core::audio::wav::{write_wav, WavFormat};
+use nlae_core::audio::wav::{write_wav, write_wav_with_cues, WavFormat};
 use nlae_core::audio::{decode, AudioBuffer};
 use nlae_core::dataset::{self, AudioInclusion, ExportOptions, ProjectData};
 use nlae_core::project::store::{DirStore, MemStore, Store};
@@ -1130,7 +1130,7 @@ fn run(cli: Cli) -> Res<()> {
             let fmt = WavFormat::parse(&format)
                 .ok_or_else(|| format!("unknown format `{format}` (f32 | pcm16 | pcm24)"))?;
             let fin = p.render_final().map_err(|e| e.to_string())?;
-            let bytes = write_wav(&fin.audio, fmt);
+            let bytes = write_wav_with_cues(&fin.audio, fmt, &fin.cues);
             std::fs::write(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             let file = out
                 .file_name()
@@ -1141,7 +1141,7 @@ fn run(cli: Cli) -> Res<()> {
                 &mut e,
                 "render.exported",
                 None,
-                json!({ "file": file, "format": format, "stack_hash": fin.stack_hash, "output_hash": fin.output_hash, "limiter": fin.limiter, "file_sha256": nlae_core::hash::sha256(&bytes) }),
+                json!({ "file": file, "format": format, "stack_hash": fin.stack_hash, "output_hash": fin.output_hash, "limiter": fin.limiter, "file_sha256": nlae_core::hash::sha256(&bytes), "duration_s": fin.audio.duration_s(), "edits": fin.edits }),
             )
             .map_err(|e| e.to_string())?;
             println!(
@@ -1151,6 +1151,10 @@ fn run(cli: Cli) -> Res<()> {
                 fin.output_hash
             );
             println!("limiter: {}", serde_json::to_string(&fin.limiter).unwrap());
+            for (sample, label) in &fin.cues {
+                let at = *sample as f64 / fin.audio.sample_rate as f64;
+                println!("at {at:.3} s of the output: {label}");
+            }
         }
         Cmd::SaveRecipe {
             project,

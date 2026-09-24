@@ -149,10 +149,13 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
         // Required parameters get plausible values; everything else is defaulted.
         let mut given = serde_json::Map::new();
         for p in desc.params.iter().filter(|p| p.required) {
-            given.insert(
-                p.id.clone(),
-                json!(if p.id == "f_lo" { 900.0 } else { 1100.0 }),
-            );
+            let v = match p.id.as_str() {
+                "f_lo" => 900.0,
+                "at_s" => 0.5,
+                "duration_s" => 0.25,
+                _ => 1100.0,
+            };
+            given.insert(p.id.clone(), json!(v));
         }
         let params = desc.normalise_params(&Value::Object(given)).unwrap();
         assert_eq!(
@@ -162,7 +165,12 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
             desc.id
         );
         let op = reg.get(&desc.id, desc.version).unwrap();
-        let scope = Scope::Clip;
+        // The whole clip where allowed; a removal needs a stretch.
+        let scope = if desc.scopes.contains(&Scope::Clip.kind()) {
+            Scope::Clip
+        } else {
+            Scope::TimeRange { t0: 0.25, t1: 0.5 }
+        };
         assert!(desc.scopes.contains(&scope.kind()));
         let resolved = op
             .resolve(&params, &scope, &input)
@@ -178,10 +186,10 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
         )
         .unwrap();
     }
-    // Nine operations; line_reduce has two versions (v1 kept for replays).
-    assert_eq!(ids.len(), 10, "descriptors (operation × version)");
+    // Eleven operations; line_reduce has two versions (v1 kept for replays).
+    assert_eq!(ids.len(), 12, "descriptors (operation × version)");
     ids.dedup();
-    assert_eq!(ids.len(), 9, "operations");
+    assert_eq!(ids.len(), 11, "operations");
 }
 
 #[test]

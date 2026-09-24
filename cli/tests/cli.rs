@@ -196,3 +196,51 @@ fn ask_in_plain_words_locally_and_through_a_model() {
     assert!(chat.contains("\"source\":\"reconstructed\""), "{chat}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn time_edits_in_words_then_an_export_with_cue_markers() {
+    let dir = workdir("edits");
+    let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
+    let sr = clip.mix.sample_rate as usize;
+    std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
+    nlae(&["new", "clip.wav", "-o", "case"], &dir);
+
+    let out = nlae(&["ask", "case", "remove 2 to 3 seconds"], &dir);
+    assert!(
+        out.contains("Remove 2.000–3.000 s of the original"),
+        "{out}"
+    );
+    nlae(&["accept", "case", &preview_id(&out)], &dir);
+    let out = nlae(&["ask", "case", "insert 0.5 s of silence at 6 s"], &dir);
+    assert!(
+        out.contains("Insert 0.500 s of silence at 6.000 s"),
+        "{out}"
+    );
+    nlae(&["accept", "case", &preview_id(&out)], &dir);
+
+    let out = nlae(&["render", "case", "-o", "out.wav"], &dir);
+    assert!(
+        out.contains("at 2.000 s of the output: removed 2.000-3.000 s of the original (1.000 s)"),
+        "{out}"
+    );
+    let bytes = std::fs::read(dir.join("out.wav")).unwrap();
+    let (audio, _) = nlae_core::audio::decode(&bytes, Some("wav")).unwrap();
+    assert_eq!(audio.len(), clip.mix.len() - sr + sr / 2);
+    assert!(
+        bytes.windows(4).any(|w| w == b"cue "),
+        "cue markers written"
+    );
+    let log = nlae(&["log", "case", "--json"], &dir);
+    assert!(
+        log.contains("\"kind\":\"removed\""),
+        "the export records the edits"
+    );
+
+    // Time edits belong to this recording: a recipe of only edits is refused.
+    let err = nlae_fails(
+        &["save-recipe", "case", "-o", "r.json", "--name", "cut"],
+        &dir,
+    );
+    assert!(err.contains("time edits"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
