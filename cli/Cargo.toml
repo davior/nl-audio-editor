@@ -17,3 +17,4 @@ serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 png = "0.18"
 getrandom = "0.3"
+ureq = "3"

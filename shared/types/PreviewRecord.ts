@@ -5,4 +5,8 @@ export type PreviewRecord = { preview_id: string,
 /**
  * `step` or `plan`.
  */
-kind: string, plan_id?: string | null, steps: Array<Step>, window: [number, number], base_stack_hash: string, recipe?: Record<string, unknown> | null, seq: bigint, event_hash: string, };
+kind: string, plan_id?: string | null, steps: Array<Step>, window: [number, number], base_stack_hash: string, recipe?: Record<string, unknown> | null, 
+/**
+ * The `assistant.exchange` event (its hash) the previewed steps came from.
+ */
+exchange?: string | null, seq: bigint, event_hash: string, };

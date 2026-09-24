@@ -114,3 +114,84 @@ fn record_preview_accept_replay_export() {
     assert!(std::fs::metadata(dir.join("r.png")).unwrap().len() > 100);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn nlae_fails(args: &[&str], dir: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_nlae"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("runs");
+    assert!(!out.status.success(), "nlae {args:?} should have failed");
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
+#[test]
+fn ask_in_plain_words_locally_and_through_a_model() {
+    let dir = workdir().join("ask");
+    std::fs::create_dir_all(&dir).unwrap();
+    let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
+    std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
+    nlae(&["new", "clip.wav", "-o", "case"], &dir);
+
+    // Stated numbers are handled here, without a model.
+    let out = nlae(&["ask", "case", "cut 3,100 to 3,200 Hz by 12 dB"], &dir);
+    assert!(
+        out.contains("Handled here: Cut 3100–3200 Hz by 12 dB"),
+        "{out}"
+    );
+    nlae(&["accept", "case", &preview_id(&out)], &dir);
+
+    // A model's answer (saved, so no network): validated, logged, previewed.
+    let answer = serde_json::json!({ "choices": [{ "message": { "role": "assistant",
+        "content": "The hum at 50 Hz and its harmonics stand out; reducing them.",
+        "tool_calls": [{ "id": "call_1", "type": "function", "function": {
+            "name": "line_reduce",
+            "arguments": "{\"params\":{\"lines\":\"auto\"},\"scope\":{\"kind\":\"band\",\"f_lo\":40,\"f_hi\":400}}" } }] } }] });
+    std::fs::write(dir.join("answer.json"), answer.to_string()).unwrap();
+    let out = nlae(
+        &[
+            "ask",
+            "case",
+            "the hum is distracting",
+            "--response-file",
+            "answer.json",
+        ],
+        &dir,
+    );
+    assert!(out.contains("deepseek-chat: The hum at 50 Hz"), "{out}");
+    nlae(&["accept", "case", &preview_id(&out)], &dir);
+    let log = nlae(&["log", "case", "--json"], &dir);
+    assert!(log.contains("assistant.exchange"), "{log}");
+    let stack = nlae(&["stack", "case", "--json"], &dir);
+    let steps: serde_json::Value = serde_json::from_str(&stack).unwrap();
+    let last = &steps[1];
+    assert_eq!(last["op"], "line_reduce");
+    assert_eq!(last["actor"]["model"], "deepseek-chat");
+    assert_eq!(last["actor"]["provider"], "deepseek");
+    assert_eq!(last["intent"], "the hum is distracting");
+
+    // An answer out of range is refused, never clamped (and still logged).
+    let bad = serde_json::json!({ "choices": [{ "message": { "role": "assistant", "content": null,
+        "tool_calls": [{ "id": "call_2", "type": "function", "function": {
+            "name": "gain", "arguments": "{\"params\":{\"gain_db\":90},\"scope\":{\"kind\":\"clip\"}}" } }] } }] });
+    std::fs::write(dir.join("bad.json"), bad.to_string()).unwrap();
+    let err = nlae_fails(
+        &[
+            "ask",
+            "case",
+            "make it much louder",
+            "--response-file",
+            "bad.json",
+        ],
+        &dir,
+    );
+    assert!(err.contains("gain_db"), "{err}");
+
+    // Undo in words; and the dataset carries the exchange as it happened.
+    assert!(nlae(&["ask", "case", "undo"], &dir).contains("stays in the log"));
+    nlae(&["dataset", "case", "-o", "ds"], &dir);
+    let chat = std::fs::read_to_string(dir.join("ds/chat.jsonl")).unwrap();
+    assert!(chat.contains("\"source\":\"exchange\""), "{chat}");
+    assert!(chat.contains("\"source\":\"reconstructed\""), "{chat}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

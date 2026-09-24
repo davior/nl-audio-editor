@@ -150,6 +150,8 @@ pub struct PreviewOptions {
     pub plan: bool,
     /// The recipe this preview replays, if any.
     pub recipe: Option<Value>,
+    /// The `assistant.exchange` event (its hash) the steps came from, if any.
+    pub exchange: Option<String>,
 }
 
 /// A preview: the record logged, and the audio for listening.
@@ -949,6 +951,7 @@ impl<S: Store> Project<S> {
             window: [crate::math::round_to(t0, 6), crate::math::round_to(t1, 6)],
             base_stack_hash: base_hash,
             recipe: opts.recipe.clone(),
+            exchange: opts.exchange.clone(),
             seq: 0,
             event_hash: String::new(),
         };

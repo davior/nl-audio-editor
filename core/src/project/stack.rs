@@ -23,6 +23,9 @@ pub struct PreviewRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]
     pub recipe: Option<Value>,
+    /// The `assistant.exchange` event (its hash) the previewed steps came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<String>,
     #[serde(default)]
     pub seq: u64,
     #[serde(default)]

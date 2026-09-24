@@ -57,6 +57,10 @@ enum Cmd {
     },
     /// Preview one operation on a short window. Nothing is committed.
     Preview(PreviewArgs),
+    /// Ask for a change in your own words. Routine requests (clean-up, undo,
+    /// commands with their numbers) are handled here; anything else goes to the
+    /// model, which is sent words and analysis numbers only, never audio.
+    Ask(AskArgs),
     /// Preview a recipe (built-in or file) as one plan, after a dry-run diff.
     Plan(PlanArgs),
     /// Replay a recipe on a recording or project (alias of `plan`, creating the project if needed).
@@ -213,6 +217,254 @@ enum Cmd {
         #[arg(long)]
         short: bool,
     },
+}
+
+#[derive(Args)]
+struct AskArgs {
+    project: PathBuf,
+    /// What you want, e.g. "the hum is distracting".
+    words: String,
+    /// deepseek, ollama, or the base URL of any OpenAI-compatible endpoint.
+    #[arg(long, default_value = "deepseek")]
+    provider: String,
+    /// The model (default: deepseek-chat on DeepSeek, qwen2.5 on Ollama).
+    #[arg(long)]
+    model: Option<String>,
+    /// Use this saved model response (JSON) instead of calling the provider.
+    #[arg(long)]
+    response_file: Option<PathBuf>,
+    /// What "here" refers to: time:T0,T1 or tf:T0,T1,FLO,FHI.
+    #[arg(long)]
+    selection: Option<String>,
+    /// Preview window T0:T1 in seconds (default: 10 s).
+    #[arg(long)]
+    window: Option<String>,
+    /// Write the processed window here.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Write what the proposal removes here.
+    #[arg(long)]
+    residual: Option<PathBuf>,
+}
+
+/// Where requests go: provider name (recorded), base URL, model, key.
+struct Provider {
+    name: String,
+    base: String,
+    model: String,
+    key: Option<String>,
+}
+
+fn provider(a: &AskArgs) -> Res<Provider> {
+    let env_key = |names: &[&str]| names.iter().find_map(|n| std::env::var(n).ok());
+    match a.provider.as_str() {
+        "deepseek" => Ok(Provider {
+            name: "deepseek".into(),
+            base: "https://api.deepseek.com".into(),
+            model: a.model.clone().unwrap_or_else(|| "deepseek-chat".into()),
+            key: env_key(&["DEEPSEEK_API_KEY", "NLAE_API_KEY"]),
+        }),
+        "ollama" => Ok(Provider {
+            name: "ollama".into(),
+            base: "http://localhost:11434/v1".into(),
+            model: a.model.clone().unwrap_or_else(|| "qwen2.5".into()),
+            key: None,
+        }),
+        url if url.starts_with("http://") || url.starts_with("https://") => Ok(Provider {
+            name: host_of(url),
+            base: url.to_string(),
+            model: a
+                .model
+                .clone()
+                .ok_or("--model is needed with a provider URL")?,
+            key: env_key(&["NLAE_API_KEY"]),
+        }),
+        other => Err(format!(
+            "unknown provider `{other}` (deepseek | ollama | an https:// URL)"
+        )),
+    }
+}
+
+fn host_of(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Send a request body (built by the core) and return the answer, the time it
+/// took and the host. The key goes in the header only.
+fn complete(p: &Provider, body: &str) -> Res<(Value, u64, String)> {
+    let url = format!("{}/chat/completions", p.base.trim_end_matches('/'));
+    let host = host_of(&url);
+    let started = std::time::Instant::now();
+    let mut req = ureq::post(&url).header("Content-Type", "application/json");
+    if let Some(k) = &p.key {
+        req = req.header("Authorization", &format!("Bearer {k}"));
+    }
+    let mut resp = req.send(body).map_err(|e| format!("{host}: {e}"))?;
+    let text = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| format!("{host}: {e}"))?;
+    let v = serde_json::from_str(&text).map_err(|e| format!("{host} did not answer JSON: {e}"))?;
+    Ok((v, started.elapsed().as_millis() as u64, host))
+}
+
+fn ask(a: &AskArgs) -> Res<()> {
+    use nlae_core::assistant::{self, Exchange, Route};
+    let mut e = SystemEnv;
+    let mut p = open_dir(&a.project)?;
+    let selection = match &a.selection {
+        None => None,
+        Some(s) => Some(match parse_scope(s)? {
+            Scope::TimeRange { t0, t1 } => assistant::Selection {
+                time: Some([t0, t1]),
+                area: None,
+            },
+            Scope::TfPatch { t0, t1, f_lo, f_hi } => assistant::Selection {
+                time: None,
+                area: Some([t0, t1, f_lo, f_hi]),
+            },
+            _ => return Err("--selection is time:T0,T1 or tf:T0,T1,FLO,FHI".into()),
+        }),
+    };
+    let window = parse_window(&a.window)?;
+    let preview_opts = |exchange: Option<String>| PreviewOptions {
+        window,
+        exchange,
+        ..Default::default()
+    };
+    match assistant::route(&a.words, selection.as_ref()) {
+        Route::Recipe { name } => {
+            println!("Handled here: the built-in `{name}` recipe, measured on this recording.");
+            let recipe = Recipe::builtin(&name).ok_or(format!("no built-in recipe `{name}`"))?;
+            let (plan, pv) = nlae_core::recipe::preview_replay(
+                &mut p,
+                &mut e,
+                &recipe,
+                ReplayMode::Adaptive,
+                Actor::user(),
+                window,
+                Some(&a.words),
+            )
+            .map_err(|e| e.to_string())?;
+            println!("Dry-run diff:");
+            show::diff(&plan.diff);
+            print_preview(&p, &pv, &a.out, &a.residual)
+        }
+        Route::Steps { steps } => {
+            for s in &steps {
+                println!("Handled here: {}", s.understood);
+            }
+            let drafts = steps
+                .iter()
+                .map(|s| s.draft(Origin::Cli, &a.words))
+                .collect();
+            let pv = p
+                .preview(&mut e, drafts, preview_opts(None))
+                .map_err(|e| e.to_string())?;
+            print_preview(&p, &pv, &a.out, &a.residual)
+        }
+        Route::Undo => {
+            let s = p.remove_top(&mut e, None).map_err(|e| e.to_string())?;
+            println!("Removed {} ({}); it stays in the log.", s.step_id, s.op);
+            Ok(())
+        }
+        Route::Listen { which } => {
+            println!(
+                "Nothing to change. To hear it: nlae spectrogram {} --what {which}, or nlae render.",
+                a.project.display()
+            );
+            Ok(())
+        }
+        Route::Model => {
+            let prov = provider(a)?;
+            let request = assistant::request_for(&mut p, &prov.model, &[], &a.words, selection)
+                .map_err(|e| e.to_string())?;
+            let body = request.to_string();
+            let (response, latency_ms, host) = match &a.response_file {
+                Some(f) => {
+                    let text =
+                        std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+                    let v =
+                        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+                    (v, 0, format!("{} (saved response)", host_of(&prov.base)))
+                }
+                None => {
+                    if prov.name == "deepseek" && prov.key.is_none() {
+                        return Err("set DEEPSEEK_API_KEY (or NLAE_API_KEY) to ask DeepSeek".into());
+                    }
+                    println!("Asking {} ({})…", prov.model, prov.name);
+                    complete(&prov, &body)?
+                }
+            };
+            let parsed = assistant::parse_response(&response);
+            let mut exchange = Exchange {
+                provider: prov.name.clone(),
+                model: prov.model.clone(),
+                host,
+                request: body.clone(),
+                response: response.clone(),
+                latency_ms,
+                problems: parsed.as_ref().err().cloned(),
+                corrects: None,
+            };
+            let mut hash =
+                assistant::record_exchange(&mut p, &mut e, &exchange).map_err(|e| e.to_string())?;
+            let parsed = match parsed {
+                Ok(proposal) => proposal,
+                Err(problems) if a.response_file.is_none() => {
+                    println!(
+                        "The proposal could not be used ({}); asking once to correct it.",
+                        problems.join("; ")
+                    );
+                    let fix = assistant::build_correction(&request, &response, &problems)?;
+                    let fix_body = fix.to_string();
+                    let (response, latency_ms, host) = complete(&prov, &fix_body)?;
+                    let again = assistant::parse_response(&response);
+                    exchange = Exchange {
+                        host,
+                        request: fix_body,
+                        response,
+                        latency_ms,
+                        problems: again.as_ref().err().cloned(),
+                        corrects: Some(hash.clone()),
+                        ..exchange
+                    };
+                    hash = assistant::record_exchange(&mut p, &mut e, &exchange)
+                        .map_err(|e| e.to_string())?;
+                    again.map_err(|pr| {
+                        format!("the model's proposal could not be used: {}", pr.join("; "))
+                    })?
+                }
+                Err(problems) => {
+                    return Err(format!(
+                        "the model's proposal could not be used: {}",
+                        problems.join("; ")
+                    ))
+                }
+            };
+            if let Some(t) = &parsed.text {
+                println!("{}: {t}", prov.model);
+            }
+            if parsed.steps.is_empty() {
+                return Ok(());
+            }
+            let drafts = parsed.drafts(
+                &Actor::assistant(&prov.model, &prov.name),
+                Origin::Cli,
+                &a.words,
+            );
+            let mut opts = preview_opts(Some(hash));
+            opts.plan = parsed.plan;
+            let pv = p.preview(&mut e, drafts, opts).map_err(|e| e.to_string())?;
+            print_preview(&p, &pv, &a.out, &a.residual)
+        }
+    }
 }
 
 #[derive(Args)]
@@ -443,6 +695,7 @@ fn run_plan<S: Store>(p: &mut Project<S>, recipe: &Recipe, common: &PlanCommon) 
         window: parse_window(&common.window)?,
         plan: true,
         recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
+        exchange: None,
     };
     let pv = p
         .preview(&mut e, plan.drafts.clone(), opts)
@@ -733,6 +986,7 @@ fn run(cli: Cli) -> Res<()> {
                 .map_err(|e| e.to_string())?;
             println!("Rejected {preview} (recorded).");
         }
+        Cmd::Ask(a) => ask(&a)?,
         Cmd::Undo { project } => {
             let mut p = open_dir(&project)?;
             let s = p.remove_top(&mut e, None).map_err(|e| e.to_string())?;
@@ -876,7 +1130,8 @@ fn run(cli: Cli) -> Res<()> {
             let fmt = WavFormat::parse(&format)
                 .ok_or_else(|| format!("unknown format `{format}` (f32 | pcm16 | pcm24)"))?;
             let fin = p.render_final().map_err(|e| e.to_string())?;
-            write_audio(&out, &fin.audio, fmt)?;
+            let bytes = write_wav(&fin.audio, fmt);
+            std::fs::write(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             let file = out
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -886,7 +1141,7 @@ fn run(cli: Cli) -> Res<()> {
                 &mut e,
                 "render.exported",
                 None,
-                json!({ "file": file, "format": format, "stack_hash": fin.stack_hash, "output_hash": fin.output_hash, "limiter": fin.limiter }),
+                json!({ "file": file, "format": format, "stack_hash": fin.stack_hash, "output_hash": fin.output_hash, "limiter": fin.limiter, "file_sha256": nlae_core::hash::sha256(&bytes) }),
             )
             .map_err(|e| e.to_string())?;
             println!(
