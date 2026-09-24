@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Capture } from "./audio/recorder";
-import { core, transferFiles } from "./core/client";
+import { core, onCoreFailure, transferFiles } from "./core/client";
 import * as Comlink from "comlink";
 import type { ProjectSummary } from "./core/types";
 import { debug, timing } from "./debug";
@@ -54,6 +54,18 @@ export function App() {
     setError(msg);
     debug("error", msg);
   }, []);
+
+  // Not an ordinary error: nothing works until the page is reloaded, so it stays on screen.
+  const [coreFailure, setCoreFailure] = useState<string | null>(null);
+  useEffect(
+    () =>
+      onCoreFailure((e) => {
+        console.error(e);
+        setCoreFailure(e.message);
+        debug("coreFailure", e.message);
+      }),
+    [],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -208,6 +220,11 @@ export function App() {
           </span>
         )}
       </header>
+      {coreFailure && (
+        <div className="banner bad error" data-testid="core-failure">
+          {coreFailure}
+        </div>
+      )}
       {error && (
         <div className="banner bad error" data-testid="error">
           {error}
@@ -219,7 +236,7 @@ export function App() {
       <Library
         entries={entries}
         currentId={current?.summary.id ?? null}
-        busy={!!busy}
+        busy={!!busy || !!coreFailure}
         onOpen={openFromLibrary}
         onImport={importFile}
         onOpenBundle={openBundle}
