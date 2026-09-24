@@ -78,7 +78,8 @@ keys, and no audio unless `--with-audio` is given.
 
 The `level` target was 6 dB. The two synthetic voices overlap in time–frequency (moving pitch
 smears their partials across cells), which caps what per-cell processing can separate at about
-5.5 dB on this material; the target is recorded at 5 dB. Tuning that produced these defaults:
+5.5 dB on this material; the target is recorded at 5 dB (accepted by the product owner,
+2026-09-24; to be checked against real recordings). Tuning that produced these defaults:
 the `transient` reference moved from the median to the upper quartile (speech onsets were
 being treated as transients), and `threshold_db` gained a mode-dependent `auto` default.
 
