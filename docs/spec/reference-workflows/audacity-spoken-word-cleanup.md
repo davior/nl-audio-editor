@@ -35,6 +35,16 @@ action stack, adaptive replay and the built-in recipe
 | 7 | Compressor (optional) | `compressor`, optional step | dynamics and loudness | parameters, dynamics before and after |
 | — | — | `limiter`, always last, ceiling −1 dBFS | — | how much it acted (usually 0 dB) |
 
+### Order in the automated recipe
+
+The built-in recipe runs **DC removal → noise reduction → line reduction → normalise →
+(compressor)**: the normalise moves after the reductions. In Audacity the level comes first so the
+waveform is visible while working; in the application the waveform has a view-only zoom instead.
+Every step is relative to the clip's own levels, so the order does not change what the reductions
+do — but they move the peak by hundredths of a dB, so normalising last makes the −1 dBFS target
+exact at the end and the final limiter has nothing to do (tested). Your manual order is recorded
+as you perform it. `OPEN:` confirm this reordering is acceptable.
+
 ### Why steps 2–3 become two steps
 
 In 32-bit float processing, the intermediate "+30 dB until full scale" changes nothing

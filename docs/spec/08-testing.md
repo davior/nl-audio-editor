@@ -35,16 +35,38 @@ can be applied to each component separately to measure per-component effects exa
 
 ## Acceptance scenarios
 
-**Reference workflow, automatic** (clip A, built-in recipe): DC below 1e-4; peak −1 dBFS ± 0.1
-with the limiter inactive; noise in speech pauses down ≥ 10 dB; every line's remaining
-prominence ≤ 3 dB; foreground and background voice energy changed ≤ 2 dB; previewed and accepted
-as one plan.
+**Reference workflow, automatic** (clip A, built-in recipe `spoken-word-cleanup`, adaptive),
+measured 2026-09-24:
 
-**Manual process made reusable**: the Audacity steps repeated by hand on clip A; saved as a
-recipe; inferred bindings point at the detected lines; adaptive replay on clip B moves the cuts
-to 620 Hz and 2,450 Hz and leaves B's lines ≤ 3 dB; exact replay leaves them ≥ 8 dB; a rating is
-recorded; the dataset export validates, with rejected and modified steps flagged and clone pairs
-linked, and without keys or audio unless requested.
+| Criterion | Target | Measured |
+|---|---|---|
+| DC offset after | < 1e-4 | 1.45e-6 |
+| Peak after (before the limiter) | −1 dBFS ± 0.1 | −1.000 dBFS |
+| Final limiter | inactive | 0 samples touched |
+| Noise (noise + rumble components) in the speech pause | ≥ 10 dB down | −10.4 dB |
+| Every line's remaining prominence (50, 100, 750, 3,150 Hz) | ≤ 3 dB | ≤ 1.95 dB |
+| Foreground / background voice energy | within ±2 dB | −0.3 / −1.2 dB |
+| Previewed and accepted as one plan | yes | yes |
+
+**Manual process made reusable** (measured 2026-09-24): the Audacity steps repeated by hand on
+clip A — a rejected +40 dB, then +30 dB, DC removal, a normalise changed from −3 to −1 dBFS before
+accepting (recorded as a modification), noise reduction with a hand-picked profile at
+40.4–41.4 s, cuts at 740–760 Hz and 3,100–3,200 Hz with depths read off the analysis — saved as a
+recipe. The inferred bindings point at the detected lines (750 Hz, 3,150 Hz), the profile at the
+quietest region, the gain at a target peak. Replayed on clip B:
+
+| | 620 Hz line | 2,450 Hz line |
+|---|---|---|
+| Adaptive: cut moved to | 610–630 Hz | 2,400–2,500 Hz |
+| Adaptive: stood above surroundings / cut by | 7.5 / 7.2 dB | 7.7 / 7.4 dB |
+| Exact: cut by / still stands | 0.0 / 10.1 dB | 0.0 / 10.9 dB |
+
+Line reductions are measured per component (the line's own attenuation across its cut) rather
+than as prominence in the result: a 100 Hz-wide cut also lowers part of the ±150 Hz neighbourhood
+that prominence is measured against, which understates the cut. The dataset export over five
+projects (A, B adaptive, B exact, two clones of B) validates against the schemas; rejected and
+modified steps are flagged; the clones are linked as siblings and to their parent; there are no
+keys, and no audio unless `--with-audio` is given.
 
 **Spectral compressor** (clip A), measured per component:
 

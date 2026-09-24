@@ -148,6 +148,104 @@ fn err(param: &str, message: impl Into<String>) -> ParamError {
 }
 
 impl Descriptor {
+    /// OpenAI-compatible tool definition for the model: the operation's
+    /// parameters with their hard limits, and the scopes it accepts.
+    pub fn tool_schema(&self) -> Value {
+        let mut props = Map::new();
+        let mut required = Vec::new();
+        for p in &self.params {
+            let mut desc = p.title.clone();
+            if !p.help.is_empty() {
+                desc = format!("{desc}. {}", p.help);
+            }
+            let auto = serde_json::json!({ "const": "auto" });
+            let schema = match &p.kind {
+                ParamKind::Number {
+                    unit,
+                    min,
+                    max,
+                    auto_allowed,
+                    ..
+                } => {
+                    if let Some(u) = unit {
+                        desc = format!("{desc} ({u})");
+                    }
+                    let n = serde_json::json!({ "type": "number", "minimum": min, "maximum": max });
+                    if *auto_allowed {
+                        serde_json::json!({ "anyOf": [n, auto] })
+                    } else {
+                        n
+                    }
+                }
+                ParamKind::Integer {
+                    min,
+                    max,
+                    auto_allowed,
+                } => {
+                    let n =
+                        serde_json::json!({ "type": "integer", "minimum": min, "maximum": max });
+                    if *auto_allowed {
+                        serde_json::json!({ "anyOf": [n, auto] })
+                    } else {
+                        n
+                    }
+                }
+                ParamKind::Enum { values } => {
+                    serde_json::json!({ "type": "string", "enum": values })
+                }
+                ParamKind::Bool => serde_json::json!({ "type": "boolean" }),
+                ParamKind::TimeRange => serde_json::json!({ "anyOf": [auto, {
+                    "type": "object", "required": ["t0", "t1"], "additionalProperties": false,
+                    "properties": { "t0": { "type": "number", "minimum": 0 }, "t1": { "type": "number", "minimum": 0 } }
+                }] }),
+                ParamKind::Lines { max_items } => serde_json::json!({ "anyOf": [auto, {
+                    "type": "array", "minItems": 1, "maxItems": max_items,
+                    "items": { "type": "object", "required": ["freq_hz", "width_hz", "depth_db"], "additionalProperties": false,
+                        "properties": {
+                            "freq_hz": { "type": "number", "exclusiveMinimum": 0 },
+                            "width_hz": { "type": "number", "exclusiveMinimum": 0, "maximum": 2000 },
+                            "depth_db": { "type": "number", "minimum": 0, "maximum": 60 } } }
+                }] }),
+            };
+            let mut schema = schema;
+            schema["description"] = Value::String(desc);
+            if p.required {
+                required.push(Value::String(p.id.clone()));
+            }
+            props.insert(p.id.clone(), schema);
+        }
+        let scope_variants: Vec<Value> = self
+            .scopes
+            .iter()
+            .map(|k| match k {
+                ScopeKind::Clip => serde_json::json!({ "type": "object", "properties": { "kind": { "const": "clip" } }, "required": ["kind"] }),
+                ScopeKind::TimeRange => serde_json::json!({ "type": "object", "required": ["kind", "t0", "t1"],
+                    "properties": { "kind": { "const": "time_range" }, "t0": { "type": "number" }, "t1": { "type": "number" } } }),
+                ScopeKind::Band => serde_json::json!({ "type": "object", "required": ["kind", "f_lo", "f_hi"],
+                    "properties": { "kind": { "const": "band" }, "f_lo": { "type": "number" }, "f_hi": { "type": "number" } } }),
+                ScopeKind::TfPatch => serde_json::json!({ "type": "object", "required": ["kind", "t0", "t1", "f_lo", "f_hi"],
+                    "properties": { "kind": { "const": "tf_patch" }, "t0": { "type": "number" }, "t1": { "type": "number" },
+                        "f_lo": { "type": "number" }, "f_hi": { "type": "number" } } }),
+            })
+            .collect();
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.id,
+                "description": self.summary,
+                "parameters": {
+                    "type": "object",
+                    "required": ["params", "scope"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "params": { "type": "object", "additionalProperties": false, "properties": props, "required": required },
+                        "scope": { "oneOf": scope_variants }
+                    }
+                }
+            }
+        })
+    }
+
     pub fn param(&self, id: &str) -> Option<&ParamSpec> {
         self.params.iter().find(|p| p.id == id)
     }

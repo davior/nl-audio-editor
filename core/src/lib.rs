@@ -7,11 +7,14 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod dataset;
 pub mod dsp;
 pub mod engine;
 pub mod golden;
 pub mod hash;
 pub mod math;
 pub mod ops;
+pub mod project;
 pub mod provenance;
+pub mod recipe;
 pub mod scope;

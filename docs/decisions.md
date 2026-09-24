@@ -36,6 +36,7 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 ## Operations
 
 - **Audacity steps 2–3 become `dc_remove` → `normalise` to −1 dBFS** — in float the intermediate +30 dB changes nothing; removing DC first makes the peak exact; −1 dBFS leaves the final limiter inactive (≈1 dB quieter than the current final amplify).
+- **The built-in recipe normalises after the reductions** (DC → noise → lines → normalise → optional compressor) — the reductions move the peak by hundredths of a dB; normalising last makes −1 dBFS exact and keeps the final limiter inactive. Manual order is recorded as performed. (`OPEN:` for the product owner.)
 - **Steps 5–6 become `line_reduce`** — automatic line detection, each line cut by its measured prominence, re-measured until nothing stands out; the stop rule becomes a recorded measurement.
 - **Noise-reduction parameter names follow Audacity's** — familiar to the product owner; results are not bit-identical to Audacity's.
 - **Noise profile stored per bin in the resolved step** — a per-band profile would fail to gate steady lines present in the profile, as Audacity's does; about 1,000 numbers per step.

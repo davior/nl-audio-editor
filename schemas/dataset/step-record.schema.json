@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/dataset/step-record.schema.json",
+  "title": "Dataset step record",
+  "description": "One line of steps.jsonl: state -> action -> decision -> outcome.",
+  "type": "object",
+  "required": ["record", "record_version", "id", "project", "decision", "state", "action", "outcome", "hashes"],
+  "properties": {
+    "record": { "const": "step" },
+    "record_version": { "const": 1 },
+    "id": { "type": "string" },
+    "project": { "type": "object", "required": ["id", "name", "source_sha256"] },
+    "decision": {
+      "type": "object",
+      "required": ["outcome", "applied", "previews_before_decision"],
+      "properties": {
+        "outcome": { "enum": ["accepted", "rejected", "superseded", "switched_off"] },
+        "applied": { "type": "boolean" },
+        "modification": { "type": ["object", "null"], "properties": { "from_params": { "type": "object" }, "to_params": { "type": "object" } } },
+        "previews_before_decision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "state": { "type": "object", "required": ["features", "stack_before"],
+      "properties": { "features": { "$ref": "../step.schema.json#/$defs/features" }, "stack_before": { "type": "array", "items": { "type": "string" } } } },
+    "action": { "type": "object", "required": ["op", "op_version", "params", "resolved", "scope", "bindings", "actor", "origin", "class", "label"],
+      "properties": {
+        "scope": { "$ref": "../step.schema.json#/$defs/scope" },
+        "actor": { "$ref": "../step.schema.json#/$defs/actor" },
+        "bindings": { "type": "object", "additionalProperties": { "$ref": "../step.schema.json#/$defs/binding" } }
+      } },
+    "outcome": { "type": "object", "required": ["measurements"] },
+    "rating": { "type": ["object", "null"] },
+    "hashes": { "type": "object", "required": ["source", "input"] }
+  }
+}
