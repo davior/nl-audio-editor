@@ -67,7 +67,6 @@ pub fn gain_to_target(measured: f64, target_lufs: f64) -> f64 {
     target_lufs - measured
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,6 +8,9 @@
 pub mod analysis;
 pub mod audio;
 pub mod dsp;
+pub mod engine;
 pub mod hash;
 pub mod math;
+pub mod ops;
 pub mod provenance;
+pub mod scope;

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nlae.local/schemas/op-descriptor.schema.json",
+  "title": "Operation descriptor",
+  "description": "One per operation and version. Validation, panels, tool schemas, logging, replay and the training corpus are derived from it.",
+  "type": "object",
+  "required": ["id", "version", "title", "summary", "category", "class", "scopes", "params", "residual"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "category": { "enum": ["gain_level", "filters_eq", "noise_restoration", "separation", "time_pitch", "stereo", "spectral", "creative", "analysis", "utility", "safety"] },
+    "class": { "enum": ["analysis", "corrective", "attenuative", "reconstruction", "creative", "safety"] },
+    "system": { "type": "boolean" },
+    "scopes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["clip", "time_range", "band", "tf_patch"] } },
+    "params": { "type": "array", "items": { "$ref": "#/$defs/param" } },
+    "identity": { "type": "array", "items": { "type": "object" } },
+    "residual": { "enum": ["exact", "approximate", "n/a"] },
+    "measurements": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "title"], "additionalProperties": false,
+        "properties": { "id": { "type": "string" }, "title": { "type": "string" }, "unit": { "type": "string" } }
+      }
+    },
+    "binding_hints": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["param", "feature", "note"], "additionalProperties": false,
+        "properties": { "param": { "type": "string" }, "feature": { "type": "string" }, "note": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "param": {
+      "type": "object",
+      "required": ["id", "title", "type"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "title": { "type": "string" },
+        "help": { "type": "string" },
+        "required": { "type": "boolean" },
+        "default": {},
+        "type": { "enum": ["number", "integer", "enum", "bool", "time_range", "lines"] },
+        "unit": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number" },
+        "auto_allowed": { "type": "boolean" },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "max_items": { "type": "integer", "minimum": 1 }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "number" } } }, "then": { "required": ["min", "max"] } },
+        { "if": { "properties": { "type": { "const": "integer" } } }, "then": { "required": ["min", "max"] } },
+        { "if": { "properties": { "type": { "const": "enum" } } }, "then": { "required": ["values"] } },
+        { "if": { "properties": { "type": { "const": "lines" } } }, "then": { "required": ["max_items"] } },
+        { "if": { "not": { "properties": { "required": { "const": true } }, "required": ["required"] } }, "then": { "required": ["default"] } }
+      ]
+    }
+  }
+}

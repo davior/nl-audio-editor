@@ -1,0 +1,21 @@
+{
+  "id": "normalise",
+  "version": 1,
+  "title": "Normalise",
+  "summary": "Bring the peak level to a target. Measured on the clip, applied as a fixed gain.",
+  "category": "gain_level",
+  "class": "corrective",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "target_peak_dbfs", "title": "Target peak", "type": "number", "unit": "dBFS", "min": -60, "max": 0, "step": 0.1, "default": -1,
+      "help": "−1 dBFS leaves the final limiter nothing to do." }
+  ],
+  "identity": [],
+  "residual": "exact",
+  "measurements": [
+    { "id": "gain_db", "title": "Gain applied", "unit": "dB" },
+    { "id": "peak_before_dbfs", "title": "Peak before", "unit": "dBFS" },
+    { "id": "peak_after_dbfs", "title": "Peak after", "unit": "dBFS" }
+  ],
+  "binding_hints": []
+}
