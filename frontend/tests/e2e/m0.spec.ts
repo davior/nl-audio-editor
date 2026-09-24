@@ -104,12 +104,13 @@ test("4. save, reload and reopen: hash, view and selection are identical and the
   await start(page2);
   await page2.getByTestId("bundle-input").setInputFiles(bundle);
   await expect(page2.getByTestId("editor")).toBeVisible();
+  // The export itself is logged, so the bundle holds one more event. The
+  // editor reads the log after it appears: wait for it.
+  await expect.poll(async () => (await nlae(page2)).project.events).toBe(before.project.events + 1);
   const opened = await nlae(page2);
   expect(opened.view).toEqual(before.view);
   expect(opened.project.id).toBe(before.project.id);
   expect(opened.project.sourceSha).toBe(fx.sourceSha);
-  // The export itself is logged, so the bundle holds one more event.
-  expect(opened.project.events).toBe(before.project.events + 1);
   await expect(page2.getByTestId("integrity")).toHaveAttribute("data-ok", "true");
   await other.close();
 });
