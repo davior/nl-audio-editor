@@ -373,10 +373,23 @@ fn bundles_round_trip_and_tampering_is_located() {
     store
         .files
         .insert("events.jsonl".into(), edited.into_bytes());
-    let (_, report) = Project::open(store, app()).unwrap();
+    let (mut q, report) = Project::open(store, app()).unwrap();
     let f = report.log.first_failure.as_ref().expect("tamper detected");
     assert_eq!(f.line, 1);
     assert!(!report.ok());
+    // Nothing is chained onto a broken log, and the view is not saved either.
+    assert!(q.read_only().is_some());
+    assert!(matches!(
+        q.export_bundle(&mut env, None),
+        Err(ProjectError::ReadOnly(_))
+    ));
+    assert!(matches!(
+        q.set_view(json!({"zoom": 3})),
+        Err(ProjectError::ReadOnly(_))
+    ));
+    assert!(q
+        .clone_into(&mut env, MemStore::new(), None, None, None)
+        .is_err());
 
     // Replacing the source is detected too.
     let mut store = bundle::unpack(&bytes).unwrap();

@@ -125,6 +125,19 @@ pub fn spec_a() -> Spec {
     }
 }
 
+/// A 12-second variant of clip A with every kind of event, for quick end-to-end
+/// runs (command-line and browser tests).
+pub fn spec_a_short() -> Spec {
+    let mut s = spec_a();
+    s.name = "golden_a_short".into();
+    s.duration_s = 12.0;
+    s.long_pause = (8.0, 10.0);
+    s.whine_spans = vec![(2.0, 3.0)];
+    s.bang_times = vec![5.5];
+    s.clip_span = (11.0, 11.3);
+    s
+}
+
 pub fn spec_b() -> Spec {
     Spec {
         name: "golden_b".into(),

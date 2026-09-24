@@ -207,7 +207,12 @@ enum Cmd {
         range: f64,
     },
     /// Write the golden clips (mixtures and components) and their hashes.
-    Golden { out: PathBuf },
+    Golden {
+        out: PathBuf,
+        /// Only the 12-second variant of clip A (mixture only), for quick tests.
+        #[arg(long)]
+        short: bool,
+    },
 }
 
 #[derive(Args)]
@@ -1043,14 +1048,21 @@ fn run(cli: Cli) -> Res<()> {
                 out.display()
             );
         }
-        Cmd::Golden { out } => {
+        Cmd::Golden { out, short } => {
             std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
             let mut hashes = serde_json::Map::new();
-            for spec in [nlae_core::golden::spec_a(), nlae_core::golden::spec_b()] {
+            let specs = if short {
+                vec![nlae_core::golden::spec_a_short()]
+            } else {
+                vec![nlae_core::golden::spec_a(), nlae_core::golden::spec_b()]
+            };
+            for spec in specs {
                 let clip = nlae_core::golden::generate(&spec);
                 let mut files = vec![(format!("{}.wav", spec.name), clip.mix.clone())];
-                for (name, c) in &clip.components {
-                    files.push((format!("{}.{name}.wav", spec.name), c.clone()));
+                if !short {
+                    for (name, c) in &clip.components {
+                        files.push((format!("{}.{name}.wav", spec.name), c.clone()));
+                    }
                 }
                 for (name, audio) in files {
                     let bytes = write_wav(&audio, WavFormat::F32);

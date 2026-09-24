@@ -20,3 +20,11 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+# No post-processing of the compiled module: the parity test verifies exactly
+# what the compiler produced, and wasm-opt is not needed at this size.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false

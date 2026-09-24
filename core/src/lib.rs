@@ -14,6 +14,7 @@ pub mod golden;
 pub mod hash;
 pub mod math;
 pub mod ops;
+pub mod parity;
 pub mod project;
 pub mod provenance;
 pub mod recipe;

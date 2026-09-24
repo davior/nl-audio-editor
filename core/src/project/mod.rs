@@ -54,6 +54,8 @@ pub enum ProjectError {
     Json(String, String),
     #[error("{0}")]
     Invalid(String),
+    #[error("this project did not verify and is read-only: {0}")]
+    ReadOnly(String),
 }
 
 type Result<T> = std::result::Result<T, ProjectError>;
@@ -232,6 +234,9 @@ pub struct Project<S: Store> {
     features_cache: HashMap<String, Features>,
     /// Persist renders under `renders/` (directory projects).
     pub cache_renders: bool,
+    /// Set when opening found problems. Nothing is written to a project that
+    /// does not verify: no event is chained onto a broken log.
+    read_only: Option<String>,
 }
 
 fn to_json<T: Serialize>(v: &T) -> Value {
@@ -320,6 +325,7 @@ impl<S: Store> Project<S> {
             renders: HashMap::new(),
             features_cache: HashMap::new(),
             cache_renders: false,
+            read_only: None,
         };
         let actor = opts.actor.clone().unwrap_or_else(Actor::user);
         p.append(
@@ -454,6 +460,7 @@ impl<S: Store> Project<S> {
             manifest_consistent,
             problems,
         };
+        let read_only = (!report.ok()).then(|| report.problems.join("; "));
         let p = Project {
             store,
             manifest,
@@ -464,6 +471,7 @@ impl<S: Store> Project<S> {
             renders: HashMap::new(),
             features_cache: HashMap::new(),
             cache_renders: false,
+            read_only,
         };
         Ok((p, report))
     }
@@ -474,6 +482,11 @@ impl<S: Store> Project<S> {
 
     pub fn state(&self) -> &StackState {
         &self.state
+    }
+
+    /// Why the project is read-only, if it is (it did not verify when opened).
+    pub fn read_only(&self) -> Option<&str> {
+        self.read_only.as_deref()
     }
 
     pub fn source_sha256(&self) -> &str {
@@ -496,6 +509,7 @@ impl<S: Store> Project<S> {
         actor: &Actor,
         data: Value,
     ) -> Result<Value> {
+        self.writable()?;
         let ev = self.log.append(env, &self.app, kind, actor, data);
         self.store
             .append("events.jsonl", EventLog::line_of(&ev).as_bytes())?;
@@ -512,7 +526,15 @@ impl<S: Store> Project<S> {
         Ok(ev)
     }
 
+    fn writable(&self) -> Result<()> {
+        match &self.read_only {
+            Some(why) => Err(ProjectError::ReadOnly(why.clone())),
+            None => Ok(()),
+        }
+    }
+
     pub fn save_manifest(&mut self) -> Result<()> {
+        self.writable()?;
         let bytes = serde_json::to_vec_pretty(&self.manifest).expect("serialisable");
         self.store.replace("manifest.json", &bytes)?;
         Ok(())
@@ -1177,6 +1199,7 @@ impl<S: Store> Project<S> {
             renders: HashMap::new(),
             features_cache: self.features_cache.clone(),
             cache_renders: false,
+            read_only: None,
         };
         child.append(
             env,

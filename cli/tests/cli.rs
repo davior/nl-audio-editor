@@ -35,13 +35,7 @@ fn workdir() -> PathBuf {
 #[test]
 fn record_preview_accept_replay_export() {
     let dir = workdir();
-    let mut spec = nlae_core::golden::spec_a();
-    spec.duration_s = 12.0;
-    spec.long_pause = (8.0, 10.0);
-    spec.whine_spans = vec![(2.0, 3.0)];
-    spec.bang_times = vec![5.5];
-    spec.clip_span = (11.0, 11.3);
-    let clip = nlae_core::golden::generate(&spec);
+    let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
     std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
 
     nlae(&["new", "clip.wav", "-o", "case"], &dir);
