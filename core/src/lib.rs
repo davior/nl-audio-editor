@@ -5,6 +5,7 @@
 // Index loops are the clearest way to write most DSP kernels here.
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
+pub mod analysis;
 pub mod audio;
 pub mod dsp;
 pub mod hash;
