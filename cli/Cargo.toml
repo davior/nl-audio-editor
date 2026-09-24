@@ -1,0 +1,20 @@
+[package]
+name = "nlae-cli"
+description = "Command-line front end for nlae: the first actor on the action stack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nlae"
+path = "src/main.rs"
+
+[dependencies]
+nlae-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+clap = { version = "4", features = ["derive"] }
+png = "0.18"
+getrandom = "0.3"

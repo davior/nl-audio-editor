@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["core", "wasm", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+publish = false
+
+[workspace.dependencies]
+nlae-core = { path = "core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+
+# DSP and analysis tests are far too slow unoptimised; keep debug info but optimise.
+[profile.test]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
