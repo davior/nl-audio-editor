@@ -23,7 +23,12 @@ use crate::scope::Scope;
 pub const FORMAT: &str = "nlae-recipe";
 pub const FORMAT_VERSION: u32 = 1;
 
+/// The current built-in clean-up (version 2: lines must also stand out in the
+/// speech pauses).
 pub const BUILTIN_SPOKEN_WORD_CLEANUP: &str =
+    include_str!("../../recipes/builtin/spoken-word-cleanup.v2.json");
+/// Version 1, kept so replays recorded with it can be repeated exactly.
+pub const BUILTIN_SPOKEN_WORD_CLEANUP_V1: &str =
     include_str!("../../recipes/builtin/spoken-word-cleanup.v1.json");
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,8 +115,11 @@ impl Recipe {
 
     pub fn builtin(name: &str) -> Option<Recipe> {
         match name {
-            "spoken-word-cleanup" => Some(
+            "spoken-word-cleanup" | "spoken-word-cleanup@2" => Some(
                 Recipe::parse(BUILTIN_SPOKEN_WORD_CLEANUP).expect("built-in recipes are valid"),
+            ),
+            "spoken-word-cleanup@1" => Some(
+                Recipe::parse(BUILTIN_SPOKEN_WORD_CLEANUP_V1).expect("built-in recipes are valid"),
             ),
             _ => None,
         }

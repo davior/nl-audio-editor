@@ -15,7 +15,7 @@ use crate::scope::Scope;
 
 /// SHA-256 of the canonical resolved chain, then the render hash of its output.
 pub const EXPECTED_RESOLVED: &str =
-    "sha256:3fb5f782e67044e82b964002c6a9cfe46243631f48e27fd049325dfd85d8b5d2";
+    "sha256:d42e73a5e15063f9d439317f1ad146687944fcbc8cc830419dc2f663fafaa8b1";
 pub const EXPECTED_RENDER: &str =
     "sha256:8060abc87eddc8245c2cf350e9809a74dfc9c283616fef73438610a19a3787b9";
 
@@ -64,17 +64,19 @@ pub fn run() -> (String, String) {
     let mut steps: Vec<RenderStep> = Vec::new();
     let mut cur = input;
     for (op, params, scope) in chain {
+        // The latest version of every operation, so new code paths are covered.
+        let version = reg.latest(op).expect("op").descriptor().version;
         let p = reg
-            .validate(op, 1, &params, &scope)
+            .validate(op, version, &params, &scope)
             .expect("valid parity params");
         let resolved = reg
-            .get(op, 1)
+            .get(op, version)
             .expect("op")
             .resolve(&p, &scope, &cur)
             .expect("resolves");
         let step = RenderStep {
             op: op.into(),
-            op_version: 1,
+            op_version: version,
             resolved,
             scope,
         };

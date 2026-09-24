@@ -125,6 +125,7 @@ const DESCRIPTORS: &[&str] = &[
     include_str!("../../../schemas/ops/limiter.v1.json"),
     include_str!("../../../schemas/ops/noise_reduce.v1.json"),
     include_str!("../../../schemas/ops/line_reduce.v1.json"),
+    include_str!("../../../schemas/ops/line_reduce.v2.json"),
     include_str!("../../../schemas/ops/band_cut.v1.json"),
     include_str!("../../../schemas/ops/spectral_compressor.v1.json"),
 ];
@@ -137,7 +138,7 @@ fn build(desc: Descriptor) -> Box<dyn Op> {
         ("compressor", 1) => Box::new(compressor::Compressor { desc }),
         ("limiter", 1) => Box::new(limiter::Limiter { desc }),
         ("noise_reduce", 1) => Box::new(noise_reduce::NoiseReduce { desc }),
-        ("line_reduce", 1) => Box::new(spectral::LineReduce { desc }),
+        ("line_reduce", 1 | 2) => Box::new(spectral::LineReduce { desc }),
         ("band_cut", 1) => Box::new(spectral::BandCut { desc }),
         ("spectral_compressor", 1) => Box::new(spectral::SpectralCompressor { desc }),
         (id, v) => panic!("descriptor {id} v{v} has no implementation"),

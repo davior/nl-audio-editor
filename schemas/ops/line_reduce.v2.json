@@ -1,0 +1,34 @@
+{
+  "id": "line_reduce",
+  "version": 2,
+  "title": "Reduce tonal lines",
+  "summary": "Find the narrow lines (hum harmonics, whines, tones) that run through the clip, including its speech pauses, and cut each one until it no longer stands out from the surrounding material. Static and zero-phase.",
+  "category": "filters_eq",
+  "class": "attenuative",
+  "scopes": ["clip", "time_range", "band", "tf_patch"],
+  "params": [
+    { "id": "lines", "title": "Lines", "type": "lines", "max_items": 64, "default": "auto",
+      "help": "auto: detect them. Or a list of {freq_hz, width_hz, depth_db}." },
+    { "id": "min_prominence_db", "title": "Minimum prominence", "type": "number", "unit": "dB", "min": 1, "max": 40, "step": 0.5, "default": 6,
+      "help": "How far a line must stand above its neighbourhood to be treated." },
+    { "id": "min_persistence", "title": "Minimum persistence", "type": "number", "min": 0, "max": 1, "step": 0.05, "default": 0.5,
+      "help": "Share of the span in which the line must be present." },
+    { "id": "max_lines", "title": "Maximum lines", "type": "integer", "min": 1, "max": 64, "default": 16 },
+    { "id": "require_in_pauses", "title": "Only lines present in the pauses", "type": "bool", "default": true,
+      "help": "Hum and whines do not stop when people stop talking; a voice harmonic does. Detected lines must also stand out in the speech pauses (or, with too little pause, be present almost throughout)." },
+    { "id": "target_excess_db", "title": "Leave standing out by", "type": "number", "unit": "dB", "min": 0, "max": 24, "step": 0.5, "default": 0,
+      "help": "0 = cut until the line matches the surrounding material." },
+    { "id": "max_depth_db", "title": "Maximum cut", "type": "number", "unit": "dB", "min": 0, "max": 60, "step": 0.5, "default": 40 },
+    { "id": "width_factor", "title": "Width factor", "type": "number", "min": 0.5, "max": 4, "step": 0.1, "default": 1 }
+  ],
+  "identity": [{ "max_depth_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "lines_reduced", "title": "Lines reduced" },
+    { "id": "max_remaining_prominence_db", "title": "Largest remaining prominence", "unit": "dB" },
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "lines", "feature": "tonal_lines", "note": "auto re-detects the lines on each clip." }
+  ]
+}

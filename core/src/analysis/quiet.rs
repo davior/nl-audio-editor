@@ -145,14 +145,35 @@ fn halves_difference(audio: &AudioBuffer, s0: usize, s1: usize) -> f64 {
     median_in_place(&mut d) as f64
 }
 
+/// A 20 ms frame is active (speech, or any other foreground sound) when its
+/// energy is more than this far above the floor.
+pub const ACTIVE_ABOVE_FLOOR_DB: f64 = 9.0;
+
+/// The floor activity is measured against: the 10th percentile of the frame
+/// energies.
+pub fn activity_floor(energies: &[f64]) -> f64 {
+    if energies.is_empty() {
+        return crate::math::DB_FLOOR;
+    }
+    let mut v: Vec<f32> = energies.iter().map(|&d| d as f32).collect();
+    crate::dsp::smooth::quantile_in_place(&mut v, 0.1) as f64
+}
+
+/// Which frames are active, by the rule above.
+pub fn active_frames(energies: &[f64]) -> Vec<bool> {
+    let floor = activity_floor(energies);
+    energies
+        .iter()
+        .map(|&d| d > floor + ACTIVE_ABOVE_FLOOR_DB)
+        .collect()
+}
+
 /// Share of 20 ms frames more than 9 dB above the noise floor (10th percentile).
 pub fn activity_ratio(energies: &[f64]) -> f64 {
     if energies.is_empty() {
         return 0.0;
     }
-    let mut v: Vec<f32> = energies.iter().map(|&d| d as f32).collect();
-    let floor = crate::dsp::smooth::quantile_in_place(&mut v, 0.1) as f64;
-    let active = energies.iter().filter(|&&d| d > floor + 9.0).count();
+    let active = active_frames(energies).iter().filter(|&&a| a).count();
     round_to(active as f64 / energies.len() as f64, 3)
 }
 

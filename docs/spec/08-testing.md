@@ -83,15 +83,17 @@ smears their partials across cells), which caps what per-cell processing can sep
 the `transient` reference moved from the median to the upper quartile (speech onsets were
 being treated as transients), and `threshold_db` gained a mode-dependent `auto` default.
 
-**Line detection on a short clip** (`OPEN:` for the product owner): on the 12-second variant
-of clip A (`nlae golden --short`), detection reports the four real lines (50, 100, 150 Hz hum;
-750 and 3,150 Hz) at widths of 5.9–8.8 Hz, present in 100% of segments — and also two voice
-harmonics, 583.7 Hz and 1,861.5 Hz (widths 17.6 and 20.5 Hz, present in 75% and 67% of
-segments), which the built-in recipe then cuts by about 8.8 dB. Both are multiples of a
-~116.5 Hz pitch the synthetic voice holds near phrase ends, lifted by formants. It does not
-happen on the 60-second clips. Proposal: a line must also be present in the speech pauses —
-hum and whines do not stop when people stop talking — before `line_reduce` cuts it
-automatically.
+**Line detection on a short clip** (found 2026-09-24, fixed in `line_reduce` v2 and features
+v2): on the 12-second variant of clip A (`nlae golden --short`), version 1 of the detection
+reported the real lines (50, 100, 150 Hz hum; 750 and 3,150 Hz) at widths of 5.9–8.8 Hz, present
+in 100% of segments — and also two voice harmonics, 583.7 Hz and 1,861.5 Hz (widths 17.6 and
+20.5 Hz, present in 75% and 67% of segments), which the built-in recipe then cut by about 8.8 dB.
+Both are multiples of a ~116.5 Hz pitch the synthetic voice holds near phrase ends, lifted by
+formants. With the pause rule (agreed with the product owner) a line must also stand out in the
+speech pauses; detection now returns exactly 50, 100, 150, 750 and 3,150 Hz on that clip, and a
+synthetic case (a tone that sounds only while "talking", 70% of the time) is rejected while the
+steady line under it is kept (`tonal` and `ops` unit tests). Version 1 still resolves the seven
+lines, so recipes recorded with it replay as they did.
 
 ## Browser end to end (Playwright, headless Chromium, fake microphone)
 

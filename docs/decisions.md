@@ -46,6 +46,8 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Noise-reduction parameter names follow Audacity's** — familiar to the product owner; results are not bit-identical to Audacity's.
 - **Noise profile stored per bin in the resolved step** — a per-band profile would fail to gate steady lines present in the profile, as Audacity's does; about 1,000 numbers per step.
 - **The spectral compressor's `level` mode is held to 5 dB of foreground reduction relative to the background, not 6 dB** — the two synthetic voices overlap in time and frequency, which caps per-cell separation near 5.5 dB on the golden clip; to be checked against real recordings. Agreed with the product owner, 2026-09-24.
+- **`line_reduce` v2: a detected line must also stand out in the speech pauses** (or, with under 1 s of pause, be present in ≥ 90% of the clip) — hum and whines continue through pauses, voice harmonics do not; found on the 12 s golden clip, agreed with the product owner 2026-09-24.
+- **A change to what `auto` resolves to is a new operation version; the old version stays** — a recorded recipe must replay as it did. `line_reduce` v1 remains registered; the built-in recipe moves to v2 (`builtin:spoken-word-cleanup`, with v1 as `builtin:spoken-word-cleanup@1`); features move to version 2.
 - **Out-of-range parameters are rejected, not clamped** — a silent clamp would record a value the user never chose.
 - **Limiter always appended by the renderer, ceiling −1 dBFS** — required by the brief; bit-exact passthrough when nothing exceeds the ceiling.
 - **Integer WAV export rounds to nearest without dither** — deterministic; float WAV is the default export.
