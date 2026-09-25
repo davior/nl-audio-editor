@@ -124,8 +124,9 @@ view, playhead, what the lanes drew). End-to-end tests read it; nothing reads it
 
 ## M1 as built
 
-**Console.** A panel under the lanes. Say what should happen, in words.
-- Each turn shows whether it was handled here or which model answered it.
+**Console.** A panel under the lanes. Say what should happen, in words, typed or spoken.
+- Each turn shows whether it was handled here or which model answered it, and whether it was
+  spoken.
 - A proposal is a card:
   - each operation, its scope and key values;
   - its measurements over the preview window;
@@ -168,7 +169,20 @@ The preview's zoom is never saved as the project's view.
 - **In the stack panel:** the output's length is shown next to the original's.
 
 **Settings.** Provider preset, address, model, provider name, key, *Remember on this device*,
-and *Test connection* (see `06-reasoning-layer.md`).
+and *Test connection* (see `06-reasoning-layer.md`). A **Speech (Deepgram)** section has the
+streaming address, model, language, key, *Remember on this device*, *Let Deepgram keep my
+dictation to improve its models* (ticked by default), and its own *Test connection*, which opens
+a stream and closes it without sending audio.
+
+**Dictation.** *Speak*, beside *Send*, streams the microphone to Deepgram
+(`06-reasoning-layer.md`).
+- While it listens, the box is read-only. It shows what was typed before, then the words
+  recognised, then the words still being recognised.
+- *Stop* or Enter ends listening without sending anything; Escape discards what was heard.
+- Listening also ends when the speaker pauses, after 30 s, or after 8 s without speech.
+- The words stay in the box until Enter sends them, and can be changed first.
+- Playback pauses while the microphone is on, and *Play* waits.
+- Without a Deepgram key, *Speak* opens the settings.
 
 **Export WAV.** 32-bit float, 24-bit or 16-bit. It exports the stack with its time edits and the
 final limiter, with a cue marker at each edit. It is logged as `render.exported` with:

@@ -57,6 +57,10 @@ explains the change. A replay becomes a plan, previewed and accepted as one unit
 | `chat.jsonl` | decided proposal, or step with an intent | OpenAI chat fine-tuning format. When the model proposed it, the logged exchange itself: exactly what was sent (words, analysis numbers, tools) and what came back (`metadata.source: "exchange"`, with the model, provider and prompt version). Otherwise reconstructed with the same system prompt and message format: the user's words and the analysis summary → a tool call against the registry's schema (`"reconstructed"`). Either way with the user's decision |
 | `manifest.json` | export | schema, feature and registry versions, options, counts, SHA-256 of each file |
 
+Records of a spoken request also carry `spoken`: what the recogniser heard, and whether the user
+changed it before sending (the words sent are the step's `intent`). Misheard words and their
+corrections are training data too.
+
 Audio is **not** included by default: records carry the source and render hashes, which join
 back to the project bundles. `--with-audio full` adds the sources. API keys never appear.
 

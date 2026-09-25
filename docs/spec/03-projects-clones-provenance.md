@@ -51,7 +51,8 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `source.recorded` | as above, plus the capture settings the browser actually applied |
 | `analysis.computed` | features version, render hash of the source, features hash, summary. Once per features version; it may follow creation later (the browser shows the recording first) |
 | `assistant.exchange` | provider, model, host; the request exactly as sent, its SHA-256 and the prompt version; the response; latency; the problems found, and the exchange it corrects, if any. Actor: the assistant. Never the key |
-| `step.previewed` | preview id, candidate step(s), window, window measurements, base stack hash; `kind` = `step` or `plan`; the recipe it replays or the exchange it came from, if any |
+| `speech.transcribed` | a spoken request, logged when it is sent: provider, model, host; the stream's query exactly as sent; the recogniser's request ids; what was heard (final results with their confidences), the words sent, and whether they differ; seconds of audio streamed; latency. Actor: the user. Never the key or the audio |
+| `step.previewed` | preview id, candidate step(s), window, window measurements, base stack hash; `kind` = `step` or `plan`; the recipe it replays, the exchange it came from and the spoken request it came from, if any |
 | `step.modified` | preview id, proposed parameters, changed parameters |
 | `step.accepted` | the full step object |
 | `plan.accepted` | plan id, preview id, the accepted steps, the steps switched off |

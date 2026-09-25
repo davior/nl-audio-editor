@@ -17,7 +17,9 @@ Six layers with clean boundaries. The interface holds no audio logic.
 5. **Project and provenance layer** (`core/src/project`, `core/src/provenance`,
    `core/src/recipe`, `core/src/dataset`) — projects, the event log, clones, bundles,
    recipes, dataset export.
-6. **Provider client** (M1) — thin, OpenAI-compatible.
+6. **Provider clients** (M1) — thin: OpenAI-compatible for the model, and a stream to Deepgram
+   for spoken requests. They hold the keys; the core builds what they send and logs what comes
+   back.
 
 ## Builds
 

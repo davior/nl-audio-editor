@@ -152,6 +152,66 @@ Accepting and rejecting are the existing `nlae accept` / `nlae reject`.
 - `--response-file` uses a saved model answer instead of calling a provider, so tests need no
   network or key.
 
+## Spoken commands
+
+*Speak* in the console streams the microphone to **Deepgram** (chosen by the product owner,
+2026-09-25), which sends the words back as it recognises them. The core decides what the stream
+asks for and records what came back (`core/src/assistant/speech.rs`); the browser holds the key
+and streams (`frontend/src/assistant/dictation.ts`).
+
+- **The stream.** Deepgram's live endpoint (`wss://api.deepgram.com/v1/listen`), over a
+  WebSocket, because its REST API refuses web pages (CORS). The core builds the query
+  (`listen_params`):
+  - model `nova-3` and language `en` (both can be changed in the settings);
+  - raw 16-bit mono audio (`linear16`) at the capture rate, sent about 100 ms at a time;
+  - interim results, smart formatting, and `UtteranceEnd` after 1 s without words;
+  - key terms for the editor's vocabulary (spectrogram, DC offset, sibilance, kilohertz…),
+    which only Nova-3 models accept.
+- **The key** travels as the WebSocket subprotocol (`token`, then the key), because a browser
+  cannot set headers on a WebSocket. It is held like the model's key: in memory for the
+  session, or in this browser's local storage when *Remember on this device* is ticked. It is
+  never in the address, the core, a project, a log or an export.
+- **Only dictation is streamed.** The microphone is opened with the browser's echo
+  cancellation, noise suppression and gain control on (recordings have them off). Playback
+  pauses while it is open, so a project's audio is never sent.
+- **Model improvement.** Deepgram may keep dictation to improve its models: its default, at a
+  lower price. Unticking *Let Deepgram keep my dictation* in the settings adds
+  `mip_opt_out=true`, which costs more and needs a paid account.
+- *Settings → Speech → Test connection* opens a stream and closes it at once, without audio. It
+  reports the host, the time it took and Deepgram's request id, or that the connection was
+  refused (a browser is not told why; usually the key).
+
+**The words go in the box.** Interim words appear as they are recognised and are replaced as
+they firm up. Listening stops:
+- when Deepgram reports a pause after speech;
+- on *Stop*, or on Enter;
+- after 30 s, or after 8 s without speech.
+
+Escape discards what was heard instead. Nothing is sent until the user presses Enter again, so a
+misheard "undo" cannot act on its own, and the words can be corrected first.
+
+**What is recorded.** When the words are sent, and before anything is done with them, the core
+logs `speech.transcribed`, with the user as actor:
+- provider, model, host, and the query exactly as sent;
+- Deepgram's request id for each time the microphone was opened;
+- what was heard (the final results, each with its confidence) and the words sent, and whether
+  they differ (`edited`);
+- how many seconds of audio were streamed, and how long the last results took after listening
+  stopped.
+
+The preview made from the words refers to that event (`PreviewRecord.dictation`), and the
+dataset's step and chat records carry `spoken`: what was heard, and whether the user changed
+it. The audio itself is not stored. Dictation that is never sent is not logged.
+
+**Routing.** Spoken words are routed like typed ones. The router also reads the forms a
+recogniser writes: "minus 1 dB", "1 point 5 seconds", "3.1 to 3.2 kilohertz".
+
+- **Not yet run against Deepgram itself.** The build environment's network policy denies
+  api.deepgram.com, so the tests use a stand-in. The live check: *Test connection* with a key,
+  then the routine requests in the table above, spoken. Their transcripts become router test
+  cases.
+- The command line stays typed.
+
 ## Plans
 
 A goal no single operation covers becomes a **plan**:
@@ -169,6 +229,3 @@ clean-up, but without compression" by starting from a recipe.
   place (plans in the console).
 - `OPEN:` (15) How should it behave on a small-context local model? Proposal: a reduced mode
   with the core tool set and recipes only, and an honest statement when a request needs more.
-- `OPEN:` (16) Speech-to-text for spoken commands. Chrome's Web Speech API sends voice to
-  Google, so a local engine (e.g. Whisper compiled to WebAssembly) is preferred. Typed requests
-  only so far.
