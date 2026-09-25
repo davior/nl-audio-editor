@@ -13,6 +13,9 @@
 pub mod compressor;
 pub mod descriptor;
 pub mod edit;
+pub mod eq;
+pub mod gate;
+pub mod hum;
 pub mod level;
 pub mod limiter;
 pub mod mask;
@@ -131,6 +134,14 @@ const DESCRIPTORS: &[&str] = &[
     include_str!("../../../schemas/ops/spectral_compressor.v1.json"),
     include_str!("../../../schemas/ops/remove_time.v1.json"),
     include_str!("../../../schemas/ops/insert_silence.v1.json"),
+    include_str!("../../../schemas/ops/high_pass.v1.json"),
+    include_str!("../../../schemas/ops/low_pass.v1.json"),
+    include_str!("../../../schemas/ops/bell.v1.json"),
+    include_str!("../../../schemas/ops/shelf.v1.json"),
+    include_str!("../../../schemas/ops/tilt.v1.json"),
+    include_str!("../../../schemas/ops/gate.v1.json"),
+    include_str!("../../../schemas/ops/loudness_normalise.v1.json"),
+    include_str!("../../../schemas/ops/hum_reduce.v1.json"),
 ];
 
 fn build(desc: Descriptor) -> Box<dyn Op> {
@@ -146,6 +157,14 @@ fn build(desc: Descriptor) -> Box<dyn Op> {
         ("spectral_compressor", 1) => Box::new(spectral::SpectralCompressor { desc }),
         ("remove_time", 1) => Box::new(edit::RemoveTime { desc }),
         ("insert_silence", 1) => Box::new(edit::InsertSilence { desc }),
+        ("high_pass", 1) => Box::new(eq::Pass { desc, high: true }),
+        ("low_pass", 1) => Box::new(eq::Pass { desc, high: false }),
+        ("bell", 1) => Box::new(eq::Bell { desc }),
+        ("shelf", 1) => Box::new(eq::Shelf { desc }),
+        ("tilt", 1) => Box::new(eq::Tilt { desc }),
+        ("gate", 1) => Box::new(gate::Gate { desc }),
+        ("loudness_normalise", 1) => Box::new(level::LoudnessNormalise { desc }),
+        ("hum_reduce", 1) => Box::new(hum::HumReduce { desc }),
         (id, v) => panic!("descriptor {id} v{v} has no implementation"),
     }
 }

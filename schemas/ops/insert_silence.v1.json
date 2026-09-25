@@ -5,6 +5,7 @@
   "summary": "Insert digital silence into the output at a point of the original recording; the output becomes longer. Nothing is invented. Applied to the result, just before the final limiter.",
   "category": "editing",
   "class": "edit",
+  "tier": "core",
   "scopes": ["clip"],
   "params": [
     { "id": "at_s", "title": "At", "type": "number", "unit": "s", "min": 0, "max": 86400, "step": 0.001, "required": true,

@@ -5,6 +5,7 @@
   "summary": "Raise or lower the level by a fixed amount. A time-range gain fades in and out over 5 ms at its edges.",
   "category": "gain_level",
   "class": "corrective",
+  "tier": "core",
   "scopes": ["clip", "time_range"],
   "params": [
     { "id": "gain_db", "title": "Gain", "type": "number", "unit": "dB", "min": -60, "max": 60, "step": 0.1, "default": 0,

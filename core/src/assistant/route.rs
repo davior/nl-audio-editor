@@ -91,6 +91,8 @@ impl RoutedStep {
 enum Unit {
     Hz,
     Db,
+    /// Integrated loudness (LUFS, LKFS or LU).
+    Lufs,
     /// Time, scaled to seconds.
     Seconds,
     None,
@@ -245,6 +247,8 @@ fn numbers(text: &str) -> Vec<(f64, Unit, f64)> {
             (Unit::Hz, 1.0)
         } else if rest.starts_with("db") {
             (Unit::Db, 1.0)
+        } else if ["lufs", "lkfs", "lu"].iter().any(|w| word(w)) {
+            (Unit::Lufs, 1.0)
         } else if ["ms", "msec", "millisecond", "milliseconds"]
             .iter()
             .any(|w| word(w))
@@ -267,6 +271,15 @@ fn numbers(text: &str) -> Vec<(f64, Unit, f64)> {
 
 fn has_any(text: &str, words: &[&str]) -> bool {
     words.iter().any(|w| text.contains(w))
+}
+
+/// Whether `word` appears in `text` as a whole word ("gate", not "investigate").
+fn has_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + word.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 /// Frequencies in hertz: numbers marked as frequencies, and unmarked numbers
@@ -404,6 +417,217 @@ fn decibels(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
         .collect()
 }
 
+/// The filters, EQ, gate, loudness and hum removal, when the words name one
+/// with what it needs. Checked before the generic cuts, so "cut below 100 Hz"
+/// is a high-pass and not a line at 100 Hz.
+fn catalogue(
+    t: &str,
+    nums: &[(f64, Unit, f64)],
+    freqs: &[f64],
+    dbs: &[f64],
+    span: Option<Scope>,
+) -> Option<Route> {
+    let scope = span.unwrap_or(Scope::Clip);
+    let whole = scope_words(&scope);
+    let cutting = has_any(
+        t,
+        &[
+            "cut",
+            "remove",
+            "reduce",
+            "filter",
+            "roll off",
+            "get rid of",
+            "take out",
+            "lower",
+            "kill",
+            "tame",
+        ],
+    );
+    let boosting = has_any(t, &["boost", "raise", "lift", "bring up"]);
+
+    // Loudness: "normalise to -16 LUFS", "loudness to -23".
+    let lufs = nums.iter().find(|(_, u, _)| *u == Unit::Lufs).map(|n| n.0);
+    let loudness = has_any(t, &["loudness", "lufs", "lkfs"]);
+    if lufs.is_some() || (loudness && has_any(t, &["normalise", "normalize", " to ", "target"])) {
+        let target = lufs.or_else(|| nums.iter().find(|(_, u, _)| *u == Unit::None).map(|n| n.0));
+        let target = target.map(|v| -v.abs());
+        let (params, words) = match target {
+            Some(v) => (json!({ "target_lufs": v }), format!("{v} LUFS")),
+            None => (json!({}), "the default −23 LUFS (EBU R128)".to_string()),
+        };
+        return Some(step(
+            "loudness_normalise",
+            params,
+            scope,
+            format!("Bring the integrated loudness to {words}, {whole}."),
+        ));
+    }
+
+    // High-pass and low-pass: "high-pass at 80 Hz", "cut below 100 Hz", "remove the rumble".
+    // "Below" or "above" a frequency means a filter only without an amount:
+    // "cut the treble above 5 kHz by 4 dB" is a shelf.
+    let one = freqs.len() == 1;
+    let beyond = |w: &str| one && cutting && dbs.is_empty() && has_word(t, w);
+    let high_pass = has_any(
+        t,
+        &["high-pass", "high pass", "highpass", "low-cut", "low cut"],
+    ) || has_word(t, "hpf")
+        || beyond("below")
+        || beyond("under")
+        || (cutting && t.contains("rumble"));
+    if high_pass && freqs.len() <= 1 {
+        let (params, words) = match freqs.first() {
+            Some(f) => (json!({ "cutoff_hz": f }), format!("{f:.0} Hz")),
+            None => (json!({}), "80 Hz".to_string()),
+        };
+        return Some(step(
+            "high_pass",
+            params,
+            scope,
+            format!("Cut below {words} (24 dB per octave, zero phase), {whole}."),
+        ));
+    }
+    let low_pass = has_any(
+        t,
+        &["low-pass", "low pass", "lowpass", "high-cut", "high cut"],
+    ) || has_word(t, "lpf")
+        || beyond("above")
+        || beyond("over");
+    if low_pass && one {
+        let f = freqs[0];
+        return Some(step(
+            "low_pass",
+            json!({ "cutoff_hz": f }),
+            scope,
+            format!("Cut above {f:.0} Hz (24 dB per octave, zero phase), {whole}."),
+        ));
+    }
+
+    // Shelves: "boost the bass by 3 dB", "cut the treble by 4 dB".
+    let bass = has_any(t, &["bass", "low end", "the lows", "low frequencies"]);
+    let treble = has_any(t, &["treble", "top end", "the highs", "high frequencies"]);
+    if bass != treble && !dbs.is_empty() && freqs.len() <= 1 {
+        let d = dbs[0];
+        let up = boosting || has_any(t, &["more", "louder"]);
+        let down = cutting || has_any(t, &["less", "quieter"]);
+        let g = if down && !up {
+            -d.abs()
+        } else if up && !down {
+            d.abs()
+        } else {
+            d
+        };
+        let (kind, corner) = if bass {
+            ("low", freqs.first().copied().unwrap_or(200.0))
+        } else {
+            ("high", freqs.first().copied().unwrap_or(4000.0))
+        };
+        return Some(step(
+            "shelf",
+            json!({ "kind": kind, "freq_hz": corner, "gain_db": g }),
+            scope,
+            format!(
+                "{} everything {} {corner:.0} Hz by {:.1} dB (a {kind} shelf), {whole}.",
+                if g >= 0.0 { "Raise" } else { "Lower" },
+                if bass { "below" } else { "above" },
+                g.abs()
+            ),
+        ));
+    }
+
+    // A bell: "boost 3 kHz by 3 dB", "dip 250 Hz by 4 dB".
+    let dipping = has_word(t, "dip");
+    if (boosting || dipping || has_word(t, "bell") || has_word(t, "eq")) && one && !dbs.is_empty() {
+        let g = if dipping {
+            -dbs[0].abs()
+        } else if boosting {
+            dbs[0].abs()
+        } else {
+            dbs[0]
+        };
+        let f = freqs[0];
+        return Some(step(
+            "bell",
+            json!({ "freq_hz": f, "gain_db": g }),
+            scope,
+            format!(
+                "{} {f:.0} Hz by {:.1} dB, a bell an octave wide, {whole}.",
+                if g >= 0.0 { "Raise" } else { "Lower" },
+                g.abs()
+            ),
+        ));
+    }
+
+    // Tilt: "brighter by 1.5 dB per octave".
+    if has_any(t, &["per octave", "/octave", "an octave"])
+        && !dbs.is_empty()
+        && has_any(t, &["brighter", "darker", "tilt"])
+    {
+        let d = dbs[0];
+        let g = if t.contains("darker") {
+            -d.abs()
+        } else if t.contains("brighter") {
+            d.abs()
+        } else {
+            d
+        };
+        return Some(step(
+            "tilt",
+            json!({ "db_per_octave": g }),
+            scope,
+            format!("Tilt the spectrum by {g:+} dB per octave around 1 kHz, {whole}."),
+        ));
+    }
+
+    // A gate: "gate the pauses", "gate below -50 dB".
+    if has_word(t, "gate") || has_word(t, "gating") {
+        let (params, words) = match dbs.first() {
+            Some(d) => (
+                json!({ "threshold_dbfs": -d.abs() }),
+                format!("{} dBFS", -d.abs()),
+            ),
+            None => (json!({}), "6 dB above the noise floor".to_string()),
+        };
+        return Some(step(
+            "gate",
+            params,
+            scope,
+            format!("Lower the level by up to 12 dB where it falls below {words}, {whole}."),
+        ));
+    }
+
+    // Hum removal: the mains hum and its harmonics.
+    if has_any(
+        t,
+        &[
+            "dehum",
+            "de-hum",
+            "mains",
+            "hum and its harmonics",
+            "hum and harmonics",
+            "harmonics of the hum",
+            "all the harmonics",
+        ],
+    ) {
+        let base = freqs
+            .iter()
+            .find(|f| (**f - 50.0).abs() < 1.0 || (**f - 60.0).abs() < 1.0)
+            .map(|f| if *f < 55.0 { "50" } else { "60" });
+        let (params, words) = match base {
+            Some(b) => (json!({ "fundamental": b }), format!("{b} Hz")),
+            None => (json!({}), "the mains frequency found".to_string()),
+        };
+        return Some(step(
+            "hum_reduce",
+            params,
+            scope,
+            format!("Cut the hum at {words} and its first 8 harmonics by 30 dB, {whole}."),
+        ));
+    }
+    None
+}
+
 fn step(op: &str, params: Value, scope: Scope, understood: String) -> Route {
     Route::Steps {
         steps: vec![RoutedStep {
@@ -493,6 +717,10 @@ pub fn route(words: &str, selection: Option<&Selection>) -> Route {
         )
     {
         return Route::Undo;
+    }
+
+    if let Some(r) = catalogue(&t, &nums, &freqs, &dbs, span.clone()) {
+        return r;
     }
 
     let cutting = has_any(
@@ -928,6 +1156,122 @@ mod tests {
             normalise("add a pause at this point, please."),
             "add a pause at this point, please"
         );
+    }
+
+    #[test]
+    fn the_catalogue_by_its_names_and_numbers() {
+        let r = |w: &str| only_step(route(w, None));
+        let is = |w: &str, op: &str, params: Value| {
+            let s = r(w);
+            assert_eq!((s.op.as_str(), &s.params), (op, &params), "{w}");
+        };
+        is(
+            "high-pass at 80 Hz",
+            "high_pass",
+            json!({"cutoff_hz": 80.0}),
+        );
+        is("cut below 100 Hz", "high_pass", json!({"cutoff_hz": 100.0}));
+        is(
+            "Remove everything below 60 hertz.",
+            "high_pass",
+            json!({"cutoff_hz": 60.0}),
+        );
+        is("remove the rumble", "high_pass", json!({}));
+        is("low cut", "high_pass", json!({}));
+        is(
+            "low-pass at 8 kHz",
+            "low_pass",
+            json!({"cutoff_hz": 8000.0}),
+        );
+        is(
+            "roll off above 12 kHz",
+            "low_pass",
+            json!({"cutoff_hz": 12000.0}),
+        );
+        is(
+            "high cut at 10 kHz",
+            "low_pass",
+            json!({"cutoff_hz": 10000.0}),
+        );
+        is(
+            "boost 3 kHz by 3 dB",
+            "bell",
+            json!({"freq_hz": 3000.0, "gain_db": 3.0}),
+        );
+        is(
+            "dip 250 Hz by 4 dB",
+            "bell",
+            json!({"freq_hz": 250.0, "gain_db": -4.0}),
+        );
+        is(
+            "boost the bass by 3 dB",
+            "shelf",
+            json!({"kind": "low", "freq_hz": 200.0, "gain_db": 3.0}),
+        );
+        is(
+            "cut the treble above 5 kHz by 4 dB",
+            "shelf",
+            json!({"kind": "high", "freq_hz": 5000.0, "gain_db": -4.0}),
+        );
+        is(
+            "make it brighter by 1.5 dB per octave",
+            "tilt",
+            json!({"db_per_octave": 1.5}),
+        );
+        is(
+            "darker by 1 dB per octave",
+            "tilt",
+            json!({"db_per_octave": -1.0}),
+        );
+        is(
+            "normalise to -16 LUFS",
+            "loudness_normalise",
+            json!({"target_lufs": -16.0}),
+        );
+        is(
+            "Normalize the loudness to minus 19.",
+            "loudness_normalise",
+            json!({"target_lufs": -19.0}),
+        );
+        is("normalise the loudness", "loudness_normalise", json!({}));
+        is("gate the pauses", "gate", json!({}));
+        is(
+            "gate below -50 dB",
+            "gate",
+            json!({"threshold_dbfs": -50.0}),
+        );
+        is("dehum", "hum_reduce", json!({}));
+        is("remove the mains hum", "hum_reduce", json!({}));
+        is(
+            "remove the 60 Hz hum and its harmonics",
+            "hum_reduce",
+            json!({"fundamental": "60"}),
+        );
+        // What was already understood stays as it was.
+        is(
+            "normalise to -1 dB",
+            "normalise",
+            json!({"target_peak_dbfs": -1.0}),
+        );
+        is("boost it by 6 dB", "gain", json!({"gain_db": 6.0}));
+        assert_eq!(r("remove the hum").op, "line_reduce");
+        assert_eq!(r("remove the 750 Hz line").op, "line_reduce");
+        // Short words only as words.
+        assert_eq!(
+            route("investigate the noise at the start", None),
+            Route::Model
+        );
+        // Here: the selection.
+        let sel = Selection {
+            time: Some([1.0, 2.0]),
+            area: None,
+        };
+        let s = only_step(route("high-pass here at 100 Hz", Some(&sel)));
+        assert_eq!(s.scope, Scope::TimeRange { t0: 1.0, t1: 2.0 });
+        // Not enough to go on: the model decides.
+        for w in ["low-pass it", "make it brighter", "boost the presence"] {
+            assert_eq!(route(w, None), Route::Model, "{w}");
+        }
     }
 
     #[test]

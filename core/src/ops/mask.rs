@@ -1,10 +1,11 @@
-//! The STFT-mask engine shared by `noise_reduce`, `line_reduce`, `band_cut`
-//! and `spectral_compressor`.
+//! The STFT-mask engine shared by the spectral operations and the EQs.
 //!
-//! Each operation supplies a reduction in dB (≤ 0) for every time–frequency
-//! cell in its scope. The engine renders by subtraction:
-//! `residual = ISTFT((1 − g)·X)`, `output = input − residual`. Cells that are
-//! not reduced contribute exactly zero, so:
+//! Each operation supplies a gain in dB for every time–frequency cell in its
+//! scope: a reduction (≤ 0) for everything that only cuts, or, for the EQs
+//! that may also boost, a signed gain (`Reductions::Gains`). The engine
+//! renders by subtraction: `residual = ISTFT((1 − g)·X)`,
+//! `output = input − residual` (for a boost the residual is what was added,
+//! negated). Cells that are left alone contribute exactly zero, so:
 //! - samples outside the scope (plus one window) are bit-identical;
 //! - identity settings are bit-identical;
 //! - the residual is exactly what was removed;
@@ -18,7 +19,7 @@ use crate::dsp::window::{ramp, sqrt_hann_periodic};
 use crate::math::{db_to_amp, power_to_db};
 use crate::scope::Scope;
 
-/// Reductions smaller than this snap to exactly zero.
+/// Reductions smaller than this (and boosts smaller than its opposite) snap to exactly zero.
 pub const SNAP_DB: f32 = -0.001;
 const TIME_TAPER_FRAMES: usize = 2;
 
@@ -143,8 +144,12 @@ impl Levels {
 
 /// How an operation supplies its reductions.
 pub enum Reductions<'a> {
-    /// The same reduction per bin for every frame in scope (dB, ≤ 0).
+    /// The same reduction per bin for every frame in scope (dB, ≤ 0; anything
+    /// above 0 is ignored, so an operation built on it can only cut).
     Static(&'a [f32]),
+    /// The same signed gain per bin for every frame in scope (dB): cuts and
+    /// boosts. Only operations that may raise the level use it.
+    Gains(&'a [f32]),
     /// Computed from cell levels: for frames `k0..=k1` return `(k1−k0+1) × bins`
     /// reductions. Levels are provided for `k0 − context ..= k1 + context`.
     Dynamic {
@@ -164,6 +169,8 @@ pub struct MaskStats {
     pub energy_removed: f64,
     pub peak_before_db: f64,
     pub peak_after_db: f64,
+    /// Energy of the counted cells after the gains.
+    pub energy_after: f64,
 }
 
 impl MaskStats {
@@ -188,6 +195,15 @@ impl MaskStats {
             crate::math::DB_FLOOR
         } else {
             power_to_db(self.energy_removed / self.energy)
+        }
+    }
+
+    /// How the level of the counted cells changed (dB; 0 when there was no energy).
+    pub fn level_change_db(&self) -> f64 {
+        if self.energy <= 0.0 {
+            0.0
+        } else {
+            power_to_db(self.energy_after / self.energy)
         }
     }
 }
@@ -321,9 +337,10 @@ pub fn render(
 
     if k_start <= k_end {
         let context = match reductions {
-            Reductions::Static(_) => 0,
+            Reductions::Static(_) | Reductions::Gains(_) => 0,
             Reductions::Dynamic { context, .. } => *context,
         };
+        let signed = matches!(reductions, Reductions::Gains(_));
         let chunk = 512.max(4 * context);
         let groups: Vec<Option<usize>> = if linked {
             vec![None]
@@ -343,7 +360,9 @@ pub fn render(
             while c0 <= k_end {
                 let c1 = (c0 + chunk as i64 - 1).min(k_end);
                 let red: Vec<f32> = match reductions {
-                    Reductions::Static(per_bin) => per_bin.repeat((c1 - c0 + 1) as usize),
+                    Reductions::Static(per_bin) | Reductions::Gains(per_bin) => {
+                        per_bin.repeat((c1 - c0 + 1) as usize)
+                    }
                     Reductions::Dynamic { context, compute } => {
                         let lv = levels(
                             size,
@@ -362,13 +381,14 @@ pub fn render(
                     let mut row = vec![0.0f32; bins];
                     let mut any = false;
                     for bb in 0..bins {
-                        let r = red[fi * bins + bb].min(0.0);
+                        let r = red[fi * bins + bb];
+                        let r = if signed { r } else { r.min(0.0) };
                         if r == 0.0 {
                             continue;
                         }
                         let w = geom.weight(k, bb);
                         let v = (r as f64 * w) as f32;
-                        if v < SNAP_DB {
+                        if v < SNAP_DB || (signed && v > -SNAP_DB) {
                             row[bb] = v;
                             any = true;
                         }
@@ -391,6 +411,7 @@ pub fn render(
                                 stats.cells += 1;
                                 stats.energy += p;
                                 stats.energy_removed += p * (1.0 - g) * (1.0 - g);
+                                stats.energy_after += p * g * g;
                                 stats.peak_before_db = stats.peak_before_db.max(lvl);
                                 stats.peak_after_db = stats.peak_after_db.max(lvl + r);
                                 if r < 0.0 {

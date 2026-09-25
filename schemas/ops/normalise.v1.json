@@ -5,6 +5,7 @@
   "summary": "Bring the peak level to a target. Measured on the clip, applied as a fixed gain.",
   "category": "gain_level",
   "class": "corrective",
+  "tier": "core",
   "scopes": ["clip", "time_range"],
   "params": [
     { "id": "target_peak_dbfs", "title": "Target peak", "type": "number", "unit": "dBFS", "min": -60, "max": 0, "step": 0.1, "default": -1,

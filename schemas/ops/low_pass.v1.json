@@ -1,0 +1,25 @@
+{
+  "id": "low_pass",
+  "version": 1,
+  "title": "Low-pass filter",
+  "summary": "Cut everything above a frequency: hiss, whistles and high-frequency interference above the voice. The magnitude of a Butterworth filter, −3 dB at the cutoff, applied with zero phase.",
+  "category": "filters_eq",
+  "class": "attenuative",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "cutoff_hz", "title": "Cutoff", "type": "number", "unit": "Hz", "min": 200, "max": 40000, "step": 10, "default": 8000,
+      "help": "The level is 3 dB down here and falls by the slope above it. Must be below half the sample rate." },
+    { "id": "slope_db_per_octave", "title": "Slope", "type": "number", "unit": "dB/octave", "min": 6, "max": 96, "step": 6, "default": 24 },
+    { "id": "max_depth_db", "title": "Deepest cut", "type": "number", "unit": "dB", "min": 0, "max": 120, "step": 1, "default": 60,
+      "help": "The cut never goes deeper than this; 0 leaves the audio untouched." }
+  ],
+  "identity": [{ "max_depth_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" },
+    { "id": "level_above_before_db", "title": "Level above the cutoff, before", "unit": "dB" },
+    { "id": "level_above_after_db", "title": "Level above the cutoff, after", "unit": "dB" }
+  ],
+  "binding_hints": []
+}

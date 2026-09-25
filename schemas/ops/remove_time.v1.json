@@ -5,6 +5,7 @@
   "summary": "Remove a stretch of the recording from the output, which becomes shorter. The original is untouched and processing still covers the whole recording: the removal is applied to the result, just before the final limiter. Positions are seconds of the original recording.",
   "category": "editing",
   "class": "edit",
+  "tier": "core",
   "scopes": ["time_range"],
   "params": [
     { "id": "fade_ms", "title": "Fades at the join", "type": "number", "unit": "ms", "min": 0, "max": 50, "step": 0.5, "default": 5,

@@ -89,17 +89,7 @@ pub fn features(audio: &AudioBuffer, span: Option<(f64, f64)>) -> Features {
     // One line analysis serves both the line list and hum detection.
     let spec = tonal::LineSpectrum::compute(audio, a, b);
     let lines = tonal::detect_in(&spec, audio, &LineConfig::default());
-    let hum_cands = tonal::detect_in(
-        &spec,
-        audio,
-        &LineConfig {
-            f_lo: 40.0,
-            f_hi: 400.0,
-            min_prominence_db: 3.0,
-            max_lines: 32,
-            ..LineConfig::default()
-        },
-    );
+    let hum_cands = tonal::detect_in(&spec, audio, &hum_config());
 
     Features {
         version: FEATURES_VERSION,
@@ -127,7 +117,20 @@ pub fn features(audio: &AudioBuffer, span: Option<(f64, f64)>) -> Features {
     }
 }
 
-fn detect_hum(lines: &[TonalLine]) -> Option<Hum> {
+/// Line detection tuned for mains hum: 40–400 Hz, lines 3 dB above their surroundings.
+pub(crate) fn hum_config() -> LineConfig {
+    LineConfig {
+        f_lo: 40.0,
+        f_hi: 400.0,
+        min_prominence_db: 3.0,
+        max_lines: 32,
+        ..LineConfig::default()
+    }
+}
+
+/// Mains hum among detected lines: 50 or 60 Hz, whichever has more of its
+/// first six harmonics present.
+pub(crate) fn detect_hum(lines: &[TonalLine]) -> Option<Hum> {
     let mut best: Option<Hum> = None;
     for base in [50.0, 60.0] {
         let mut found = 0u32;

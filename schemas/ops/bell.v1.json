@@ -1,0 +1,25 @@
+{
+  "id": "bell",
+  "version": 1,
+  "title": "Bell EQ",
+  "summary": "Raise or lower a band around a centre frequency, smoothly: a raised cosine in octaves, the full gain at the centre and half of it half a width away. Static and zero-phase.",
+  "category": "filters_eq",
+  "class": "corrective",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "freq_hz", "title": "Centre", "type": "number", "unit": "Hz", "min": 20, "max": 20000, "step": 1, "required": true },
+    { "id": "gain_db", "title": "Gain", "type": "number", "unit": "dB", "min": -24, "max": 24, "step": 0.5, "required": true,
+      "help": "Positive raises the band, negative lowers it." },
+    { "id": "width_octaves", "title": "Width", "type": "number", "unit": "octaves", "min": 0.1, "max": 4, "step": 0.1, "default": 1,
+      "help": "Between the points where the gain is half; the band ends a whole width either side of the centre." }
+  ],
+  "identity": [{ "gain_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "level_change_db", "title": "Level change", "unit": "dB" },
+    { "id": "band_level_before_db", "title": "Band level before", "unit": "dB" },
+    { "id": "band_level_after_db", "title": "Band level after", "unit": "dB" }
+  ],
+  "binding_hints": []
+}

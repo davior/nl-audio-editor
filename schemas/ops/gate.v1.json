@@ -1,0 +1,31 @@
+{
+  "id": "gate",
+  "version": 1,
+  "title": "Gate",
+  "summary": "Lower the level where it falls below a threshold (the pauses between words) by up to a set range. Opens slightly ahead of speech, so onsets are kept, then holds and fades out. Only ever reduces.",
+  "category": "gain_level",
+  "class": "attenuative",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "threshold_dbfs", "title": "Threshold", "type": "number", "unit": "dBFS", "min": -100, "max": 0, "step": 1, "default": "auto", "auto_allowed": true,
+      "help": "Below this the gate closes. auto = 6 dB above the scope's noise floor (the 10th percentile of its 10 ms levels)." },
+    { "id": "range_db", "title": "Range", "type": "number", "unit": "dB", "min": 0, "max": 80, "step": 1, "default": 12,
+      "help": "How far the level goes down when the gate is closed. A moderate range keeps some room tone; 0 leaves the audio untouched." },
+    { "id": "attack_ms", "title": "Look-ahead", "type": "number", "unit": "ms", "min": 0, "max": 100, "step": 1, "default": 5,
+      "help": "How far ahead of the level rising the gate opens." },
+    { "id": "hold_ms", "title": "Hold", "type": "number", "unit": "ms", "min": 0, "max": 2000, "step": 10, "default": 150 },
+    { "id": "release_ms", "title": "Release", "type": "number", "unit": "ms", "min": 1, "max": 5000, "step": 10, "default": 200 }
+  ],
+  "identity": [{ "range_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "threshold_dbfs", "title": "Threshold", "unit": "dBFS" },
+    { "id": "closed_pct", "title": "Time closed", "unit": "%" },
+    { "id": "max_reduction_db", "title": "Largest reduction", "unit": "dB" },
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "threshold_dbfs", "feature": "noise_floor_dbfs", "note": "auto sets the threshold 6 dB above the noise floor." }
+  ]
+}

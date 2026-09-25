@@ -1,0 +1,30 @@
+{
+  "id": "hum_reduce",
+  "version": 1,
+  "title": "Hum removal",
+  "summary": "Cut the mains hum and its harmonics (50 or 60 Hz, found in the recording or stated), each by a set depth, whether or not a harmonic stands out. Static and zero-phase. line_reduce instead finds each line and cuts it until it matches its surroundings.",
+  "category": "noise_restoration",
+  "class": "attenuative",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "fundamental", "title": "Mains frequency", "type": "enum", "values": ["auto", "50", "60"], "default": "auto",
+      "help": "auto looks for 50 or 60 Hz hum in the recording and cuts nothing if there is none. The exact frequency is measured from the lines found." },
+    { "id": "harmonics", "title": "Harmonics", "type": "integer", "min": 1, "max": 40, "default": 8,
+      "help": "How many multiples of the mains frequency to cut, the fundamental included." },
+    { "id": "depth_db", "title": "Cut", "type": "number", "unit": "dB", "min": 0, "max": 60, "step": 1, "default": 30 },
+    { "id": "width_hz", "title": "Width", "type": "number", "unit": "Hz", "min": 0.5, "max": 20, "step": 0.5, "default": 3,
+      "help": "At the fundamental; 10 % wider for each harmonic above it, where the mains frequency's drift is multiplied." }
+  ],
+  "identity": [{ "depth_db": 0, "fundamental": "50" }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "fundamental_hz", "title": "Mains frequency", "unit": "Hz" },
+    { "id": "harmonics_cut", "title": "Harmonics cut" },
+    { "id": "energy_removed_db", "title": "Energy removed", "unit": "dB" },
+    { "id": "max_remaining_prominence_db", "title": "Largest prominence left", "unit": "dB" }
+  ],
+  "binding_hints": [
+    { "param": "fundamental", "feature": "hum.fundamental_hz", "note": "auto uses the hum found in the recording." }
+  ]
+}

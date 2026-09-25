@@ -116,6 +116,35 @@ fn active_cases() -> Vec<(&'static str, Value, Scope)> {
             json!({"mode": "auto", "link_channels": false}),
             Scope::Clip,
         ),
+        (
+            "high_pass",
+            json!({"cutoff_hz": 200}),
+            Scope::TimeRange { t0: 0.5, t1: 2.5 },
+        ),
+        ("low_pass", json!({"cutoff_hz": 2000}), Scope::Clip),
+        (
+            "bell",
+            json!({"freq_hz": 1000, "gain_db": 6}),
+            Scope::TimeRange { t0: 0.5, t1: 2.5 },
+        ),
+        (
+            "shelf",
+            json!({"kind": "high", "freq_hz": 3000, "gain_db": -6}),
+            Scope::Clip,
+        ),
+        ("tilt", json!({"db_per_octave": 1.5}), Scope::Clip),
+        (
+            "gate",
+            json!({"threshold_dbfs": -30}),
+            Scope::TimeRange { t0: 0.5, t1: 2.5 },
+        ),
+        ("gate", json!({}), Scope::Clip),
+        (
+            "loudness_normalise",
+            json!({"target_lufs": -30}),
+            Scope::Clip,
+        ),
+        ("hum_reduce", json!({"fundamental": "50"}), Scope::Clip),
     ]
 }
 
@@ -153,6 +182,8 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
                 "f_lo" => 900.0,
                 "at_s" => 0.5,
                 "duration_s" => 0.25,
+                "gain_db" => 3.0,
+                "db_per_octave" => 1.0,
                 _ => 1100.0,
             };
             given.insert(p.id.clone(), json!(v));
@@ -186,10 +217,10 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
         )
         .unwrap();
     }
-    // Eleven operations; line_reduce has two versions (v1 kept for replays).
-    assert_eq!(ids.len(), 12, "descriptors (operation × version)");
+    // Nineteen operations; line_reduce has two versions (v1 kept for replays).
+    assert_eq!(ids.len(), 20, "descriptors (operation × version)");
     ids.dedup();
-    assert_eq!(ids.len(), 11, "operations");
+    assert_eq!(ids.len(), 19, "operations");
 }
 
 #[test]
@@ -210,6 +241,19 @@ fn out_of_range_and_unknown_parameters_are_rejected_not_clamped() {
         ),
         ("band_cut", json!({"f_hi": 3200})),
         ("limiter", json!({"ceiling_dbfs": 1})),
+        ("high_pass", json!({"cutoff_hz": 5})),
+        ("bell", json!({"freq_hz": 1000, "gain_db": 30})),
+        ("bell", json!({"gain_db": 3})),
+        (
+            "shelf",
+            json!({"kind": "middle", "freq_hz": 200, "gain_db": 3}),
+        ),
+        ("tilt", json!({"db_per_octave": 7})),
+        ("gate", json!({"range_db": 90})),
+        ("gate", json!({"threshold_dbfs": "quiet"})),
+        ("loudness_normalise", json!({"target_lufs": 0})),
+        ("hum_reduce", json!({"fundamental": "55"})),
+        ("hum_reduce", json!({"harmonics": 0})),
     ];
     for (op, p) in bad {
         let e = reg.validate(op, 1, &p, &Scope::Clip).unwrap_err();
@@ -314,6 +358,9 @@ impl WithRequired for Value {
         if op == "band_cut" {
             v["f_lo"] = json!(900);
             v["f_hi"] = json!(1100);
+        }
+        if op == "bell" || op == "shelf" {
+            v["freq_hz"] = json!(1000);
         }
         v
     }

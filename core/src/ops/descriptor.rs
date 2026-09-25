@@ -114,6 +114,18 @@ pub struct BindingHint {
     pub note: String,
 }
 
+/// How the model is shown an operation: always with its full schema
+/// (`core`), or in a one-line index, the schema sent when it asks
+/// (`on_demand`). Keeps requests small as the catalogue grows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ToolTier {
+    Core,
+    #[default]
+    OnDemand,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Descriptor {
@@ -125,6 +137,8 @@ pub struct Descriptor {
     pub class: OpClass,
     #[serde(default)]
     pub system: bool,
+    #[serde(default)]
+    pub tier: ToolTier,
     pub scopes: Vec<ScopeKind>,
     pub params: Vec<ParamSpec>,
     #[serde(default)]

@@ -81,6 +81,24 @@ pub fn attack_release(g: &[f32], att: usize, rel: usize) -> Vec<f32> {
     e
 }
 
+/// Maximum over `[i − w, i]` (clamped to the sequence) for every `i`: each
+/// value is held for `w` places after it. Linear time.
+pub fn trailing_max(xs: &[f32], w: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(xs.len());
+    let mut q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for (i, &x) in xs.iter().enumerate() {
+        while q.back().is_some_and(|&j| xs[j] <= x) {
+            q.pop_back();
+        }
+        q.push_back(i);
+        while q.front().is_some_and(|&j| j + w < i) {
+            q.pop_front();
+        }
+        out.push(xs[q[0]]);
+    }
+    out
+}
+
 /// Minimum over `[i − w, i + w]` followed by a mean over the same span. Widens
 /// reductions by `w` on each side while keeping their full depth at the centre.
 pub fn min_then_mean(g: &[f32], w: usize) -> Vec<f32> {
@@ -131,6 +149,16 @@ mod tests {
         assert!(close(e[6], -9.0) && close(e[8], -3.0), "{e:?}");
         assert_eq!(e[9], 0.0);
         assert!(e.iter().zip(&g).all(|(a, b)| a <= b));
+    }
+
+    #[test]
+    fn trailing_max_holds_each_value_for_its_width() {
+        let xs = [0.0f32, 5.0, 1.0, 0.0, 0.0, 3.0, 0.0];
+        assert_eq!(
+            trailing_max(&xs, 2),
+            vec![0.0, 5.0, 5.0, 5.0, 1.0, 3.0, 3.0]
+        );
+        assert_eq!(trailing_max(&xs, 0), xs.to_vec());
     }
 
     #[test]
