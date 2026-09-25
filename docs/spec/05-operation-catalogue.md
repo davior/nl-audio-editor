@@ -5,15 +5,19 @@ repository; the rest is the planned catalogue with a milestone.
 
 ## Shared engine for spectral operations
 
-`noise_reduce`, `line_reduce`, `band_cut` and `spectral_compressor` share one STFT-mask
-engine:
+`noise_reduce`, `line_reduce`, `band_cut`, `spectral_compressor`, `hum_reduce` and the EQs
+(`high_pass`, `low_pass`, `bell`, `shelf`, `tilt`) share one STFT-mask engine:
 
 1. STFT with a periodic sqrt-Hann window at 75% overlap on a frame grid anchored to the start
    of the clip (never to the selection), so results never depend on where a preview starts.
 2. Each operation computes a gain `g ≤ 1` per time–frequency cell (static or dynamic).
+   Only `bell`, `shelf` and `tilt` may boost. They use a separate path for signed static
+   gains (`Reductions::Gains`); every other operation goes through the cut-only path, which
+   ignores anything above 0 dB.
 3. All smoothing has finite support; each operation declares its reach.
-4. Reductions smaller than 0.001 dB snap to exactly zero.
-5. **Subtractive render**: `residual = ISTFT((1 − g)·X)`, `output = input − residual`.
+4. Gains within 0.001 dB of 0 snap to exactly zero.
+5. **Subtractive render**: `residual = ISTFT((1 − g)·X)`, `output = input − residual`. For a
+   boost the residual is what was added, negated.
 
 Consequences, all tested: samples outside the scope (plus one window) are bit-identical;
 identity settings are bit-identical; the residual is exactly what was removed; a preview is
@@ -29,13 +33,16 @@ smear, which matters for evidential material.
 | `normalise` | **built** | `target_peak_dbfs` −60…0, default −1. Resolves to a fixed gain. |
 | `compressor` | **built** | Broadband, for speech: `threshold_dbfs` −80…0 (−24), `ratio` 1–20 (3), `knee_db` 0–24 (6), `attack_ms` 0–500 (10), `release_ms` 1–5000 (150), `makeup_db` `auto` or −24…24 (`auto` restores the input peak). |
 | `limiter` | **built** (system) | Always last. `ceiling_dbfs` −20…0 (−1), `lookahead_ms` 0.5–20 (5), `release_ms` 1–1000 (50). Inactive and bit-exact when nothing exceeds the ceiling. |
-| Gating, level riding, loudness normalisation (LUFS target) | M2 | |
+| `gate` | **built** | Attenuative: lowers the level where it falls below a threshold (the pauses) by up to `range_db` 0–80 (12). `threshold_dbfs` −100…0 or `auto` (the default: 6 dB above the scope's noise floor, the 10th percentile of its 10 ms levels). `attack_ms` 0–100 (5) opens ahead of the level rising, so onsets are kept. Then `hold_ms` 0–2000 (150) and `release_ms` 1–5000 (200). Fully open at the threshold, fully closed 3 dB below it. The level comes from the compressor's control grid (a 10 ms RMS every ~0.67 ms); the opening spreads with finite reach. |
+| `loudness_normalise` | **built** | Integrated loudness (ITU-R BS.1770) of the scope to `target_lufs` −50…−5, default **−23** (EBU R128, the product owner's choice). Resolves to a fixed gain; peaks it pushes above −1 dBFS are left to the final limiter. |
+| Level riding | M2 | |
 
 ## Noise reduction and restoration
 
 | Operation | Status | Notes |
 |---|---|---|
 | `noise_reduce` | **built** | Spectral gate against a per-bin noise profile. `profile` `auto` (quietest steady region) or `{t0,t1}`; `reduction_db` 0–48 (12); `sensitivity_db` 0–24 (6); `frequency_smoothing_bands` 0–12 (3); `attack_ms` 0–500 (20); `release_ms` 0–2000 (100). Parameter names follow Audacity's so they feel familiar; results are not bit-identical to Audacity's. |
+| `hum_reduce` | **built** | Cuts the mains hum and its harmonics, each by `depth_db` 0–60 (30), whether or not a harmonic stands out. `fundamental` `auto` (the hum found in the scope; if none is found, nothing is cut), `50` or `60`. The exact frequency is measured from the lines found, e.g. 49.985 Hz. `harmonics` 1–40 (8); `width_hz` 0.5–20 (3) at the fundamental, 10 % wider for each harmonic above. The analysis is fine enough that the cut spans four bins, up to 65536 points. `line_reduce` instead finds each line and cuts it until it matches its surroundings. |
 | De-click, de-crackle | M2 | |
 | De-clip | M2 | reconstruction class |
 | De-reverb | M3 | reconstruction class |
@@ -46,8 +53,12 @@ smear, which matters for evidential material.
 |---|---|---|
 | `line_reduce` | **built** (v2) | Static, zero-phase. `lines` `auto` or explicit `[{freq_hz, width_hz, depth_db}]`; `min_prominence_db` 1–40 (6); `min_persistence` 0–1 (0.5); `max_lines` 1–64 (16); `require_in_pauses` (on); `target_excess_db` 0–24 (0 = match the surroundings); `max_depth_db` 0–60 (40); `width_factor` 0.5–4 (1). Detection band from a `band` or `tf_patch` scope. Cuts each line by its measured prominence, re-measures, and cuts again until nothing stands out; records the largest remaining prominence. **Version 2:** a detected line must also stand out by ≥ 3 dB in the speech pauses (frames in which at most 10% of the 20 ms activity frames are active), because hum and whines do not stop when people stop talking while a voice harmonic at a recurring pitch does; with less than 1 s of pause in the span it must instead be present in ≥ 90% of segments. Version 1 (no pause rule) is kept so recipes recorded with it replay exactly. |
 | `band_cut` | **built** | Manual cut: `f_lo`, `f_hi` (Hz), `depth_db` 0–60 (12), soft edges. Resolution chosen so the band spans several bins. |
-| High-pass, low-pass, shelf, bell, tilt, voice-band EQ | M2 | zero-phase on the same engine |
-| Hum removal (50/60 Hz + harmonics, automatic) | M2 | `line_reduce` already removes hum lines it finds |
+| `high_pass` | **built** | Attenuative. The magnitude of a Butterworth filter, −3 dB at `cutoff_hz` 10–2000 (80), falling by `slope_db_per_octave` 6–96 (24), never deeper than `max_depth_db` 0–120 (60). |
+| `low_pass` | **built** | Its mirror image: `cutoff_hz` 200–40000 (8000; refused at or above half the sample rate). |
+| `bell` | **built** | Corrective (may boost). `gain_db` ±24 at `freq_hz`, a raised cosine in octaves: half the gain at ±`width_octaves`/2 (0.1–4, default 1), nothing beyond ±`width_octaves`. |
+| `shelf` | **built** | Corrective. `kind` low or high; `gain_db` ±24 below or above `freq_hz`; a raised-cosine step over `transition_octaves` 0.25–4 (1), centred on the corner. |
+| `tilt` | **built** | Corrective. `db_per_octave` ±6 around `pivot_hz` 100–10000 (1000), capped at ±`max_gain_db` 0–24 (12). |
+| Voice-band EQ | M2 | Meanwhile, a high-pass and a low-pass together |
 | Dynamic EQ | M3 | |
 
 ## Spectral-domain surgical

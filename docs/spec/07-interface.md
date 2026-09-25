@@ -127,6 +127,8 @@ view, playhead, what the lanes drew). End-to-end tests read it; nothing reads it
 **Console.** A panel under the lanes. Say what should happen, in words, typed or spoken.
 - Each turn shows whether it was handled here or which model answered it, and whether it was
   spoken.
+- While the model is waiting to see an operation's parameters (`06-reasoning-layer.md`), the
+  turn says "Looking up …" with the operations it asked for.
 - A proposal is a card:
   - each operation, its scope and key values;
   - its measurements over the preview window;

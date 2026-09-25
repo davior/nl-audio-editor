@@ -28,6 +28,16 @@ from M2, because the reference workflow needs them.
   (`08-testing.md`).
 - Time edits (requested by the product owner, beyond the milestone plan) are built:
   removing a stretch and inserting silence, applied to the output, with cue markers in exports.
+- M2 has begun with the catalogue (chosen by the product owner, 2026-09-25):
+  - eight operations: `high_pass`, `low_pass`, `bell`, `shelf` and `tilt` (zero-phase EQ on
+    the shared engine, which may now boost), `gate`, `loudness_normalise` (−23 LUFS by
+    default) and `hum_reduce`;
+  - tiered tool exposure: the model always has the core operations, sees the rest in an index,
+    and asks for their schemas (`describe_operations`), one round at most;
+  - router phrases for all eight, and a describe round in the console and `nlae ask`.
+
+  Still to do in M2: generated panels with their parity tests, model-planned composite goals,
+  level riding, voice-band EQ, de-click and de-clip, and authenticity analysis.
 - Still open for M1, all needing the hosts allowed from the build environment, or a person
   with keys:
   - a manual run against DeepSeek, and whether it accepts browser requests (CORS);

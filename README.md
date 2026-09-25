@@ -109,9 +109,10 @@ What to run again after a change:
 with `nlae pack`). Projects are kept in the browser's private storage.
 
 Say what should happen in the console under the lanes: "clean this recording up", "cut 3,100
-to 3,200 Hz by 12 dB", or, with an area selected on the spectrogram, "compress the bangs here".
-Each proposal is previewed on a short window (Original / Before / Processed / Residual) and
-waits for *Accept* or *Reject*.
+to 3,200 Hz by 12 dB", "high-pass at 80 Hz", "boost 3 kHz by 3 dB", "gate the pauses",
+"normalise to −23 LUFS", "dehum", or, with an area selected on the spectrogram, "compress the
+bangs here". Each proposal is previewed on a short window (Original / Before / Processed /
+Residual) and waits for *Accept* or *Reject*.
 
 To speak instead of typing, use *Speak* beside *Send*. The words appear in the box as they are
 recognised, and nothing happens until you press Enter, so you can correct them first.
@@ -124,8 +125,9 @@ hatched, *Processed* plays the result, and the exported WAV has a cue marker at 
 
 **The model.** Routine requests like those are handled without a model and need no setup.
 Anything else goes to the provider chosen in the console's settings, with your words and
-analysis numbers only, never audio. The key stays in the browser and is never written to a
-project.
+analysis numbers only, never audio. The model always has the core operations; the others
+(the EQs, the gate, loudness and hum removal) it sees in an index and asks to see before using
+one. The key stays in the browser and is never written to a project.
 - **DeepSeek** (the default) needs a key. Whether DeepSeek accepts requests from a web page
   is not confirmed yet: *Test connection* in the settings tells you.
 - **Ollama** must allow the app's addresses:
@@ -149,6 +151,7 @@ nlae new out/golden_a_short.wav -o case    # a project: the source is stored byt
 nlae ask case "clean this recording up"    # routine requests are handled locally…
 nlae ask case "the hum is distracting"     # …the rest go to the model (DEEPSEEK_API_KEY; --provider ollama)
 nlae ask case "remove 2 to 3 seconds"      # time edits apply to the output; the original is untouched
+nlae ask case "high-pass at 80 Hz" --out hp.wav   # preview to a file (--residual r.wav: what was removed)
 nlae plan case --recipe builtin:spoken-word-cleanup --out p.wav --residual r.wav
 nlae accept case <preview-id>              # commit a preview (ids are printed by `ask` and `plan`)
 nlae stack case                            # the stack, with what each step measured
