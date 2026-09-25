@@ -148,13 +148,17 @@ fn clock_times(text: &str) -> String {
     out
 }
 
-/// Lower case, dashes as "to", thousands separators removed, spacing collapsed.
+/// Lower case, dashes as "to", thousands separators removed, spacing
+/// collapsed; spoken forms ("minus 1", "1 point 5", "kilohertz") as they
+/// would be typed.
 fn normalise(words: &str) -> String {
     let lower = clock_times(&words.to_lowercase())
         .replace(['–', '—'], " to ")
+        .replace('−', "-")
         .replace("dbfs", "db")
         .replace("decibels", "db")
         .replace("decibel", "db")
+        .replace("kilohertz", "khz")
         .replace("hertz", "hz");
     let chars: Vec<char> = lower.chars().collect();
     let mut out = String::with_capacity(chars.len());
@@ -171,11 +175,38 @@ fn normalise(words: &str) -> String {
         }
         out.push(c);
     }
-    out.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim_end_matches(['.', '!', '?'])
-        .to_string()
+    let words: Vec<&str> = out.split_whitespace().collect();
+    let number = |w: &str| w.starts_with(|c: char| c.is_ascii_digit());
+    let integer = |w: &str| {
+        let d = w.strip_prefix('-').unwrap_or(w);
+        !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())
+    };
+    let mut said: Vec<String> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let next = words.get(i + 1).copied();
+        match words[i] {
+            // "minus 1 db" → "-1 db"
+            "minus" | "negative" if next.is_some_and(number) => {
+                said.push(format!("-{}", next.unwrap_or_default()));
+                i += 2;
+            }
+            // "1 point 5 seconds" → "1.5 seconds"
+            "point"
+                if said.last().is_some_and(|w| integer(w))
+                    && next.is_some_and(|w| w.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                let whole = said.pop().unwrap_or_default();
+                said.push(format!("{whole}.{}", next.unwrap_or_default()));
+                i += 2;
+            }
+            w => {
+                said.push(w.to_string());
+                i += 1;
+            }
+        }
+    }
+    said.join(" ").trim_end_matches(['.', '!', '?']).to_string()
 }
 
 /// Numbers in order, each with the unit written after it and that unit's
@@ -842,6 +873,61 @@ mod tests {
         ] {
             assert_eq!(route(w, None), Route::Model, "{w}");
         }
+    }
+
+    #[test]
+    fn spoken_forms_route_as_typed_ones_do() {
+        // As a recogniser writes them: capitals, full stops, words for signs and units.
+        let r = |w: &str| only_step(route(w, None));
+        assert_eq!(
+            r("Normalise to minus 1 dB.").params,
+            json!({"target_peak_dbfs": -1.0})
+        );
+        assert_eq!(
+            r("Normalize to negative 3 decibels").params,
+            json!({"target_peak_dbfs": -3.0})
+        );
+        let s = r("Cut 3.1 to 3.2 kilohertz by 12 dB.");
+        assert_eq!(
+            (s.op.as_str(), &s.params),
+            (
+                "band_cut",
+                &json!({"f_lo": 3100.0, "f_hi": 3200.0, "depth_db": 12.0})
+            )
+        );
+        let s = r("Cut 3,100 to 3,200 hertz by 12 decibels.");
+        assert_eq!(
+            s.params,
+            json!({"f_lo": 3100.0, "f_hi": 3200.0, "depth_db": 12.0})
+        );
+        assert_eq!(
+            r("Remove 12 to 15.5 seconds.").scope,
+            Scope::TimeRange { t0: 12.0, t1: 15.5 }
+        );
+        assert_eq!(
+            r("Insert 1 point 5 seconds of silence at 30 seconds.").params,
+            json!({ "at_s": 30.0, "duration_s": 1.5 })
+        );
+        assert_eq!(r("Remove the 750 hertz line.").op, "line_reduce");
+        assert_eq!(r("Turn it up by 3 dB.").params, json!({"gain_db": 3.0}));
+        assert_eq!(route("Undo.", None), Route::Undo);
+        assert_eq!(
+            route("Clean this recording up.", None),
+            Route::Recipe {
+                name: "spoken-word-cleanup".into()
+            }
+        );
+        assert_eq!(
+            route("Play the residual.", None),
+            Route::Listen {
+                which: "residual".into()
+            }
+        );
+        // "At this point" is not a number.
+        assert_eq!(
+            normalise("add a pause at this point, please."),
+            "add a pause at this point, please"
+        );
     }
 
     #[test]

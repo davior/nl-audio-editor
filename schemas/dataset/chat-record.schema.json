@@ -11,6 +11,7 @@
       "items": { "type": "object", "required": ["role"], "properties": { "role": { "enum": ["system", "user", "assistant"] } } }
     },
     "tools": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["type", "function"] } },
-    "metadata": { "type": "object", "required": ["decision", "project", "step_id"] }
+    "metadata": { "type": "object", "required": ["decision", "project", "step_id"],
+      "properties": { "spoken": { "$ref": "step-record.schema.json#/$defs/spoken" } } }
   }
 }

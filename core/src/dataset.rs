@@ -7,6 +7,9 @@
 //!   lineage, and links between clones forked from the same step.
 //! - `chat.jsonl` — steps with the user's words, in the OpenAI chat
 //!   fine-tuning format (words and analysis → tool call).
+//!
+//! Records of a spoken request also carry `spoken`: what the recogniser heard
+//! and whether the user changed it before sending.
 //! - `manifest.json` — versions, options, counts and the SHA-256 of each file.
 //!
 //! Audio is left out unless asked for; records carry hashes that join back to
@@ -89,6 +92,17 @@ fn project_ref(m: &Manifest) -> Value {
     })
 }
 
+/// What a spoken request's record says about how it was heard.
+fn spoken_ref(hash: &str, dictation: &Value) -> Value {
+    json!({
+        "dictation": hash,
+        "heard": dictation["heard"],
+        "edited": dictation["edited"],
+        "provider": dictation["provider"],
+        "model": dictation["model"],
+    })
+}
+
 fn step_record(
     m: &Manifest,
     step: &Step,
@@ -99,10 +113,11 @@ fn step_record(
     modification: Option<&Value>,
     rating: Option<&Value>,
     prior_ops: &[String],
+    spoken: Option<&Value>,
 ) -> Value {
     let before = step.state_before.as_ref();
     let after = step.state_after.as_ref();
-    json!({
+    let mut record = json!({
         "record": "step",
         "record_version": RECORD_VERSION,
         "id": format!("{}:{}", m.project.id, step.step_id),
@@ -151,14 +166,23 @@ fn step_record(
             "output": step.output_hash,
             "stack": step.stack_hash,
         },
-    })
+    });
+    if let Some(s) = spoken {
+        record["action"]["spoken"] = s.clone();
+    }
+    record
 }
 
 /// A chat record for one step, reconstructed with the same prompt builder the
 /// assistant uses: the user's words and the analysis before the step, then the
 /// step as a tool call. Used where no model exchange was logged (manual work,
 /// the command line, locally routed requests).
-fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
+fn chat_record(
+    step: &Step,
+    decision: &str,
+    project: &str,
+    spoken: Option<&Value>,
+) -> Option<Value> {
     let intent = step.intent.as_ref()?;
     let reg = registry();
     let tool = reg
@@ -176,7 +200,7 @@ fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
         selection: None,
     };
     let args = json!({ "params": step.params, "scope": step.scope });
-    Some(json!({
+    let mut record = json!({
         "messages": [
             { "role": "system", "content": SYSTEM_PROMPT },
             { "role": "user", "content": user_message(intent, &ctx) },
@@ -188,7 +212,11 @@ fn chat_record(step: &Step, decision: &str, project: &str) -> Option<Value> {
         ],
         "tools": [tool],
         "metadata": { "decision": decision, "project": project, "step_id": step.step_id, "origin": step.origin, "actor": step.actor, "source": "reconstructed" },
-    }))
+    });
+    if let Some(s) = spoken {
+        record["metadata"]["spoken"] = s.clone();
+    }
+    Some(record)
 }
 
 /// A chat record from a logged model exchange: exactly what was sent and what
@@ -199,13 +227,14 @@ fn exchange_record(
     decision: &str,
     project: &str,
     preview: &PreviewRecord,
+    spoken: Option<&Value>,
 ) -> Value {
     let mut messages = exchange["request"]["messages"]
         .as_array()
         .cloned()
         .unwrap_or_default();
     messages.push(exchange["response"]["choices"][0]["message"].clone());
-    json!({
+    let mut record = json!({
         "messages": messages,
         "tools": exchange["request"]["tools"],
         "metadata": {
@@ -219,7 +248,11 @@ fn exchange_record(
             "prompt_version": exchange["prompt_version"],
             "source": "exchange",
         },
-    })
+    });
+    if let Some(s) = spoken {
+        record["metadata"]["spoken"] = s.clone();
+    }
+    record
 }
 
 fn jsonl(records: &[Value]) -> Vec<u8> {
@@ -253,6 +286,7 @@ pub fn export(
         let mut open_previews = 0u64;
         let mut per_project = BTreeMap::<&str, u64>::new();
         let mut exchanges: BTreeMap<String, Value> = BTreeMap::new();
+        let mut dictations: BTreeMap<String, Value> = BTreeMap::new();
         for ev in &pd.events {
             if ev["type"] == "stack.rated" {
                 ratings.push(json!({ "at": ev["ts"], "by": ev["actor"], "rating": ev["data"] }));
@@ -282,6 +316,9 @@ pub fn export(
                 }
                 "assistant.exchange" => {
                     exchanges.insert(ev["hash"].as_str().unwrap_or("").to_string(), data.clone());
+                }
+                "speech.transcribed" => {
+                    dictations.insert(ev["hash"].as_str().unwrap_or("").to_string(), data.clone());
                 }
                 "step.previewed" => {
                     if let Ok(p) = serde_json::from_value::<PreviewRecord>(data.clone()) {
@@ -314,8 +351,14 @@ pub fn export(
                         })
                         .map(|(oid, _)| oid.clone())
                         .collect();
+                    let spoken_of = |p: &PreviewRecord| {
+                        p.dictation
+                            .as_ref()
+                            .and_then(|h| dictations.get(h).map(|d| spoken_ref(h, d)))
+                    };
                     for oid in &superseded {
                         let op = &previews[oid];
+                        let spoken = spoken_of(op);
                         for s in &op.steps {
                             steps_out.push(step_record(
                                 m,
@@ -327,6 +370,7 @@ pub fn export(
                                 None,
                                 None,
                                 &ops_of(&stack),
+                                spoken.as_ref(),
                             ));
                             bump("superseded");
                         }
@@ -340,12 +384,20 @@ pub fn export(
                     } else {
                         "accepted"
                     };
+                    let spoken = spoken_of(p);
                     let from_exchange = p
                         .exchange
                         .as_ref()
                         .and_then(|h| exchanges.get(h).map(|x| (h, x)));
                     if let Some((h, x)) = from_exchange {
-                        chat_out.push(exchange_record(x, h, decision, &m.project.id, p));
+                        chat_out.push(exchange_record(
+                            x,
+                            h,
+                            decision,
+                            &m.project.id,
+                            p,
+                            spoken.as_ref(),
+                        ));
                     }
                     if kind == "step.rejected" {
                         for s in &p.steps {
@@ -359,9 +411,12 @@ pub fn export(
                                 None,
                                 None,
                                 &ops_of(&stack),
+                                spoken.as_ref(),
                             ));
                             if from_exchange.is_none() {
-                                if let Some(c) = chat_record(s, "rejected", &m.project.id) {
+                                if let Some(c) =
+                                    chat_record(s, "rejected", &m.project.id, spoken.as_ref())
+                                {
                                     chat_out.push(c);
                                 }
                             }
@@ -388,9 +443,12 @@ pub fn export(
                             modification,
                             rating_for(s).as_ref(),
                             &ops_of(&stack),
+                            spoken.as_ref(),
                         ));
                         if from_exchange.is_none() {
-                            if let Some(c) = chat_record(s, "accepted", &m.project.id) {
+                            if let Some(c) =
+                                chat_record(s, "accepted", &m.project.id, spoken.as_ref())
+                            {
                                 chat_out.push(c);
                             }
                         }
@@ -415,6 +473,7 @@ pub fn export(
                                     None,
                                     None,
                                     &ops_of(&stack),
+                                    spoken.as_ref(),
                                 ));
                                 bump("switched_off");
                             }

@@ -2,15 +2,18 @@
 //! shown ([`prompt`]), which requests are answered without it ([`route`]), and
 //! how its answers become validated steps ([`parse`]). Sending the request is
 //! left to the front end, which holds the provider's key; the key never
-//! passes through here.
+//! passes through here. Spoken requests are transcribed the same way
+//! ([`speech`]): the core sets what the stream asks for and logs the result.
 
 pub mod parse;
 pub mod prompt;
 pub mod route;
+pub mod speech;
 
 pub use parse::{parse_response, Proposal, ProposedStep};
 pub use prompt::{build_correction, build_request, AssistantContext, Turn, PROMPT_VERSION};
 pub use route::{route, Route, RoutedStep, Selection};
+pub use speech::{listen_params, record_dictation, Dictation, Segment};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
