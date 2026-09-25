@@ -1,0 +1,24 @@
+{
+  "id": "loudness_normalise",
+  "version": 1,
+  "title": "Loudness normalise",
+  "summary": "Bring the integrated loudness (ITU-R BS.1770) to a target, as a fixed gain measured on the scope. Peaks pushed above the ceiling are left to the final limiter.",
+  "category": "gain_level",
+  "class": "corrective",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "target_lufs", "title": "Target loudness", "type": "number", "unit": "LUFS", "min": -50, "max": -5, "step": 0.5, "default": -23,
+      "help": "−23 LUFS is the EBU R128 broadcast level; spoken word online is often −16." }
+  ],
+  "identity": [],
+  "residual": "exact",
+  "measurements": [
+    { "id": "gain_db", "title": "Gain applied", "unit": "dB" },
+    { "id": "loudness_before_lufs", "title": "Loudness before", "unit": "LUFS" },
+    { "id": "loudness_after_lufs", "title": "Loudness after", "unit": "LUFS" },
+    { "id": "peak_before_dbfs", "title": "Peak before", "unit": "dBFS" },
+    { "id": "peak_after_dbfs", "title": "Peak after", "unit": "dBFS" }
+  ],
+  "binding_hints": []
+}

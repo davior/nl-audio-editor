@@ -472,47 +472,52 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
       } else {
         const config = loadConfig();
         update(tid, { via: "model", model: `${config.provider} · ${config.model}`, text: `Asking ${config.model}…` });
+        // The core decides each round: use the answer, describe operations the
+        // model asked to see, or ask once for a correction. Every exchange is logged.
         let body = await core.assistantRequest(id, config.model, history, w, selection);
-        let { response, latencyMs, host } = await complete(config, body);
-        let parsed = await core.parseResponse(JSON.stringify(response));
-        const exchange = await core.recordExchange(id, {
-          provider: config.provider,
-          model: config.model,
-          host,
-          request: body,
-          response,
-          latency_ms: latencyMs,
-          problems: parsed.problems ?? null,
-        });
-        if (parsed.problems) {
-          // One chance to correct itself.
-          body = await core.correctionRequest(body, JSON.stringify(response), parsed.problems);
-          ({ response, latencyMs, host } = await complete(config, body));
-          parsed = await core.parseResponse(JSON.stringify(response));
-          await core.recordExchange(id, {
+        const rounds = { described: false, corrected: false };
+        let link: { corrects?: string; describes?: string } = {};
+        for (;;) {
+          const { response, latencyMs, host } = await complete(config, body);
+          const next = await core.nextRound(body, JSON.stringify(response), rounds);
+          const exchange = await core.recordExchange(id, {
             provider: config.provider,
             model: config.model,
             host,
             request: body,
             response,
             latency_ms: latencyMs,
-            problems: parsed.problems ?? null,
-            corrects: exchange,
+            problems: next.next === "correct" || next.next === "failed" ? next.problems : null,
+            ...link,
           });
-        }
-        if (parsed.problems) {
-          await save();
-          update(tid, { status: "error", problems: parsed.problems, text: "The model's proposal could not be used." });
-        } else if (parsed.proposal!.steps.length === 0) {
-          await save();
-          update(tid, { status: "reply", text: parsed.proposal!.text ?? "" });
-        } else {
-          await showPreview(
-            tid,
-            await core.previewProposal(id, parsed.proposal!, w, config.model, config.provider, exchange, dictation),
-            "model",
-            parsed.proposal!.text ?? undefined,
-          );
+          if (next.next === "describe") {
+            rounds.described = true;
+            link = { describes: exchange };
+            body = next.request;
+            update(tid, { text: `Looking up ${next.ids.join(", ")}…` });
+            continue;
+          }
+          if (next.next === "correct") {
+            rounds.corrected = true;
+            link = { corrects: exchange };
+            body = next.request;
+            continue;
+          }
+          if (next.next === "failed") {
+            await save();
+            update(tid, { status: "error", problems: next.problems, text: "The model's proposal could not be used." });
+          } else if (next.proposal.steps.length === 0) {
+            await save();
+            update(tid, { status: "reply", text: next.proposal.text ?? "" });
+          } else {
+            await showPreview(
+              tid,
+              await core.previewProposal(id, next.proposal, w, config.model, config.provider, exchange, dictation),
+              "model",
+              next.proposal.text ?? undefined,
+            );
+          }
+          break;
         }
       }
     } catch (e) {

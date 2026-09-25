@@ -5,6 +5,7 @@
   "summary": "Push down the high points inside a selected time × frequency area — whines, bangs, or a loud foreground voice — cell by cell. Only ever reduces.",
   "category": "spectral",
   "class": "attenuative",
+  "tier": "core",
   "scopes": ["clip", "time_range", "band", "tf_patch"],
   "params": [
     { "id": "mode", "title": "What counts as a high point", "type": "enum", "values": ["auto", "tonal", "transient", "level"], "default": "auto",

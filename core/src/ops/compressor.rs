@@ -50,9 +50,46 @@ struct Grid {
     rel: usize,
 }
 
+/// The control grid, shared with the gate: a level every ~0.67 ms (anchored
+/// to the clip start) from a 10 ms window. `(hop, window)` in samples.
+pub(crate) fn control_grid(sr: u32) -> (i64, i64) {
+    (
+        ((sr as f64 / 1500.0).round() as i64).max(1),
+        ((0.010 * sr as f64).round() as i64).max(1),
+    )
+}
+
+/// RMS level (dB) of the `win` samples centred on `centre`, all channels
+/// together, each window summed from scratch. Samples outside the clip or the
+/// provided input read as zero.
+pub(crate) fn window_level_db(
+    input: &AudioBuffer,
+    offset: i64,
+    clip_len: usize,
+    centre: i64,
+    win: i64,
+) -> f64 {
+    let nch = input.num_channels() as f64;
+    let sample = |ch: usize, i: i64| -> f64 {
+        let j = i - offset;
+        if i >= 0 && (i as usize) < clip_len && j >= 0 && (j as usize) < input.len() {
+            input.channels[ch][j as usize] as f64
+        } else {
+            0.0
+        }
+    };
+    let mut acc = 0.0;
+    for ch in 0..input.num_channels() {
+        for i in centre - win / 2..centre - win / 2 + win {
+            let x = sample(ch, i);
+            acc += x * x;
+        }
+    }
+    power_to_db(acc / (win as f64 * nch))
+}
+
 fn grid(r: &Resolved, sr: u32) -> Grid {
-    let hop = ((sr as f64 / 1500.0).round() as i64).max(1);
-    let win = ((0.010 * sr as f64).round() as i64).max(1);
+    let (hop, win) = control_grid(sr);
     let frames = |ms: f64| ((ms / 1000.0 * sr as f64) / hop as f64).round() as usize;
     Grid {
         hop,
@@ -94,26 +131,9 @@ fn render_with(
     // Control frames needed for interpolation over [a, b), plus smoothing context.
     let c_lo = div_floor(a, g.hop) - ctx;
     let c_hi = div_floor(b - 1, g.hop) + 1 + ctx;
-    let nch = input.num_channels() as f64;
-    let sample = |ch: usize, i: i64| -> f64 {
-        let j = i - offset;
-        if i >= 0 && (i as usize) < clip_len && j >= 0 && (j as usize) < input.len() {
-            input.channels[ch][j as usize] as f64
-        } else {
-            0.0
-        }
-    };
     let raw: Vec<f32> = (c_lo..=c_hi)
         .map(|c| {
-            let centre = c * g.hop;
-            let mut acc = 0.0;
-            for ch in 0..input.num_channels() {
-                for i in centre - g.win / 2..centre - g.win / 2 + g.win {
-                    let x = sample(ch, i);
-                    acc += x * x;
-                }
-            }
-            let level = power_to_db(acc / (g.win as f64 * nch));
+            let level = window_level_db(input, offset, clip_len, c * g.hop, g.win);
             knee_curve(level - r.threshold_dbfs, r.ratio, r.knee_db) as f32
         })
         .collect();

@@ -5,6 +5,7 @@
   "summary": "Find the narrow lines (hum harmonics, whines, tones) that run through the clip, including its speech pauses, and cut each one until it no longer stands out from the surrounding material. Static and zero-phase.",
   "category": "filters_eq",
   "class": "attenuative",
+  "tier": "core",
   "scopes": ["clip", "time_range", "band", "tf_patch"],
   "params": [
     { "id": "lines", "title": "Lines", "type": "lines", "max_items": 64, "default": "auto",

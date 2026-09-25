@@ -141,3 +141,94 @@ fn spectral_compressor_level_brings_the_background_up_relative_to_the_foreground
     );
     assert!(bg.abs() <= 2.0, "background changed {bg:.2} dB");
 }
+
+#[test]
+fn high_pass_takes_the_rumble_down_and_leaves_the_voices() {
+    let clip = clip_a();
+    let s = step(
+        "high_pass",
+        json!({"cutoff_hz": 80}),
+        Scope::Clip,
+        &clip.mix,
+    );
+    let names = ["rumble", "foreground", "background"];
+    let (_, out) = render_components(&clip.mix, &[s], &pick(clip, &names)).unwrap();
+    let rumble = change_db(clip.component("rumble"), &out["rumble"], 0.0, 60.0);
+    let fg = change_db(clip.component("foreground"), &out["foreground"], 0.0, 60.0);
+    let bg = change_db(clip.component("background"), &out["background"], 0.0, 60.0);
+    println!(
+        "high_pass 80 Hz: rumble {rumble:.2} dB, foreground {fg:.2} dB, background {bg:.2} dB"
+    );
+    assert!(rumble <= -12.0, "rumble only {rumble:.2} dB");
+    assert!(
+        fg.abs() <= 0.5 && bg.abs() <= 0.5,
+        "voices changed {fg:.2} / {bg:.2} dB"
+    );
+}
+
+#[test]
+fn hum_reduce_takes_the_mains_hum_down_and_nothing_else() {
+    let clip = clip_a();
+    let s = step("hum_reduce", json!({}), Scope::Clip, &clip.mix);
+    assert!(
+        (s.resolved["fundamental_hz"].as_f64().unwrap() - 50.0).abs() < 0.1,
+        "{}",
+        s.resolved["fundamental_hz"]
+    );
+    let names = ["hum", "foreground", "background", "line_1", "line_2"];
+    let (_, out) = render_components(&clip.mix, &[s], &pick(clip, &names)).unwrap();
+    let c = |n: &str| change_db(clip.component(n), &out[n], 0.0, 60.0);
+    let (hum, fg, bg, l1, l2) = (
+        c("hum"),
+        c("foreground"),
+        c("background"),
+        c("line_1"),
+        c("line_2"),
+    );
+    println!(
+        "hum_reduce auto: hum {hum:.2} dB, foreground {fg:.2}, background {bg:.2}, 750 Hz {l1:.2}, 3150 Hz {l2:.2} dB"
+    );
+    assert!(hum <= -20.0, "hum only {hum:.2} dB");
+    for (n, v) in [
+        ("foreground", fg),
+        ("background", bg),
+        ("750 Hz line", l1),
+        ("3150 Hz line", l2),
+    ] {
+        assert!(v.abs() <= 0.5, "{n} changed {v:.2} dB");
+    }
+}
+
+#[test]
+fn gate_takes_the_pauses_down_and_keeps_the_voice() {
+    let clip = clip_a();
+    let s = step("gate", json!({}), Scope::Clip, &clip.mix);
+    let names = ["noise", "foreground", "background"];
+    let (_, out) =
+        render_components(&clip.mix, std::slice::from_ref(&s), &pick(clip, &names)).unwrap();
+    // The long pause (40–42.5 s), once the hold and release after the last word are over.
+    let pause = change_db(clip.component("noise"), &out["noise"], 40.5, 42.3);
+    let fg = change_db(clip.component("foreground"), &out["foreground"], 0.0, 60.0);
+    let bg = change_db(clip.component("background"), &out["background"], 0.0, 60.0);
+    println!(
+        "gate auto: threshold {} dBFS (floor {}), noise in the pause {pause:.2} dB, foreground {fg:.2} dB, background {bg:.2} dB",
+        s.resolved["threshold_dbfs"], s.resolved["noise_floor_dbfs"]
+    );
+    assert!(pause <= -11.0, "noise in the pause only {pause:.2} dB");
+    assert!(fg.abs() <= 1.0, "foreground changed {fg:.2} dB");
+}
+
+#[test]
+fn loudness_normalise_reaches_its_target() {
+    let clip = clip_a();
+    let s = step("loudness_normalise", json!({}), Scope::Clip, &clip.mix);
+    let out = nlae_core::engine::render_full(&clip.mix, std::slice::from_ref(&s))
+        .unwrap()
+        .audio;
+    let lufs = nlae_core::analysis::loudness::integrated_lufs(&out, 0, out.len()).unwrap();
+    println!(
+        "loudness_normalise: {} LUFS measured, gain {} dB, {lufs:.3} LUFS after",
+        s.resolved["measured_lufs"], s.resolved["gain_db"]
+    );
+    assert!((lufs + 23.0).abs() <= 0.05, "{lufs:.3} LUFS");
+}

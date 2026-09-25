@@ -68,16 +68,30 @@ entries is refused as data rather than description. The check runs three times:
 2. on the whole request;
 3. again when the exchange is logged.
 
-The system prompt is `SYSTEM_PROMPT`, versioned by `PROMPT_VERSION` (currently 1). The version
-is recorded with every exchange, so a change of wording shows in the data. Dataset records use
-the same prompt and the same user-message format.
+The instructions are `SYSTEM_PROMPT` followed by the index of on-demand operations
+(`system_message`), versioned by `PROMPT_VERSION` (currently 2: version 1 had no index and
+offered every operation as a tool). The version is recorded with every exchange, so a change
+of wording shows in the data. Dataset records use the same instructions and the same
+user-message format.
 
-**Tools.**
-- One tool per operation: the latest version of every operation a user may apply, currently
-  nine.
+**Tools.** Exposure is tiered by the descriptor's `tier` (`04-operation-registry.md`), so the
+model keeps coping as the catalogue grows:
+- **Core:** one tool per `core` operation, the latest version of each: `gain`, `normalise`,
+  `dc_remove`, `compressor`, `noise_reduce`, `line_reduce`, `band_cut`,
+  `spectral_compressor`, `remove_time`, `insert_silence`.
+- **On demand:** the rest (currently the eight added in M2: `high_pass`, `low_pass`, `bell`,
+  `shelf`, `tilt`, `gate`, `loudness_normalise`, `hum_reduce`) appear only in the index, one
+  line each: id, title and summary. `describe_operations` (`ids`: one to eight of them) asks
+  to see their parameters.
+- A `plan` tool proposes several operations to be previewed and accepted together; its enum
+  names every operation offered, core or on demand.
 - The final limiter is applied automatically and is not offered.
-- A `plan` tool proposes several operations to be previewed and accepted together.
-- Tiered exposure, for when the catalogue grows, is M2.
+
+**The describe round.** When the model calls `describe_operations`, `build_expansion` replays
+the conversation, answers the call with those operations' full tool schemas and adds them to
+the tools; any other call in the same answer is answered as not run, to be made again. The
+model then answers as usual. The describe call wins over anything else in that answer. An
+unknown or system id is a problem like any other; a core one is simply described again.
 
 ## Routine requests are answered locally
 
@@ -92,7 +106,15 @@ predictable. It is deterministic and tested with a table of cases.
 | "cut 3,100 to 3,200 Hz by 12 dB" | `band_cut` with those values |
 | "remove the 750 Hz line" | `line_reduce` in a band around 750 Hz |
 | "normalise to −1 dB", "turn it up by 3 dB" | `normalise`, `gain` |
+| "normalise to −16 LUFS", "normalise the loudness", "normalize the loudness to minus 19" | `loudness_normalise` (−23 LUFS when no target is given) |
 | "remove the hum", "reduce the noise", "remove the DC offset" | `line_reduce` (40–1,000 Hz), `noise_reduce`, `dc_remove` |
+| "dehum", "remove the 60 Hz hum and its harmonics", "remove the mains hum" | `hum_reduce` (50 or 60 Hz when named, otherwise found) |
+| "high-pass at 80 Hz", "cut below 100 Hz", "low cut", "remove the rumble" | `high_pass` (80 Hz when no frequency is given) |
+| "low-pass at 8 kHz", "roll off above 12 kHz", "high cut at 10 kHz" | `low_pass` |
+| "boost 3 kHz by 3 dB", "dip 250 Hz by 4 dB" | `bell`, an octave wide |
+| "boost the bass by 3 dB", "cut the treble above 5 kHz by 4 dB" | `shelf` (low at 200 Hz, high at 4 kHz, unless a corner is named) |
+| "brighter by 1.5 dB per octave", "darker by 1 dB per octave" | `tilt` around 1 kHz |
+| "gate the pauses", "gate below −50 dB" | `gate` (6 dB above the noise floor when no threshold is given) |
 | "compress the bangs here", "tame the whine in this area" | `spectral_compressor` on the selected area (transient, tonal or level mode from the words) |
 | "remove 12 to 15.5 seconds", "cut from 1:20 to 1:35", "trim the first 5 seconds" | `remove_time` for that stretch |
 | "remove this part", "cut the selection out" (with a time selection, naming nothing to process) | `remove_time` for the selected stretch |
@@ -102,6 +124,13 @@ predictable. It is deterministic and tested with a table of cases.
 - "Remove this part" removes time only when the words name nothing to process: "remove the
   hum here" cuts the hum in the selection.
 - A named target beats the clean-up recipe: "clean up the hum" cuts the hum.
+- "Remove the hum" stays `line_reduce`, which cuts only the lines that are there, as far as
+  they stand out; `hum_reduce` is for the mains hum and every harmonic, asked for by name.
+- "Below" or "above" a frequency means a filter only when no amount is given: "cut the treble
+  above 5 kHz by 4 dB" is a shelf, "cut above 5 kHz" a low-pass.
+- Short words ("gate", "dip", "eq", "hpf") count only as whole words, so "investigate" is
+  not a gate.
+- Too little to go on ("low-pass it", "make it brighter") goes to the model.
 - Anything else goes to the model.
 
 ## What comes back
@@ -117,10 +146,16 @@ predictable. It is deterministic and tested with a table of cases.
   - the model's explanation as `rationale`.
 - A reply in words only (a question, say) is shown as a reply.
 
-When the answer cannot be used:
-1. The model is asked **once** to correct itself (`build_correction`): the problems are
-   returned as the result of each tool call.
-2. If the second answer fails too, the problems are shown to the user.
+The rounds that may follow an answer are decided in the core (`next_round`), so the browser
+and the command line follow the same policy:
+- **Describe**, at most once: the model asked to see on-demand operations, so it is sent their
+  schemas (above). A second `describe_operations` call is treated as an unusable answer.
+- **Correct**, at most once: when the answer cannot be used, the problems are returned as the
+  result of each tool call (`build_correction`) and the model is asked to correct itself.
+- **Done:** a usable answer is previewed, or a reply in words is shown; if the corrected answer
+  fails too, the problems are shown to the user.
+
+A request therefore makes at most three exchanges with the model.
 
 ## Every exchange is recorded
 
@@ -129,7 +164,8 @@ Each request and its answer is logged as `assistant.exchange` (actor: the assist
 - the request exactly as sent, its SHA-256 (`request_sha256`) and `prompt_version`;
 - the response and the latency;
 - `problems`, when the answer could not be used;
-- `corrects`, the hash of the exchange this one corrects.
+- `corrects`, the hash of the exchange this one corrects;
+- `describes`, the hash of the exchange whose `describe_operations` call this one answers.
 
 The preview made from an answer refers to its exchange (`PreviewRecord.exchange`). The steps
 it produces carry the model and provider. The acceptance or rejection is the user's own event.
@@ -150,7 +186,8 @@ what the user decided. Steps made without the model are reconstructed in the sam
 Accepting and rejecting are the existing `nlae accept` / `nlae reject`.
 - `--provider deepseek|ollama|<https URL>`, `--model`.
 - `--response-file` uses a saved model answer instead of calling a provider, so tests need no
-  network or key.
+  network or key. It can be given once per round, used in order: a saved describe call, then
+  the answer made with the schemas.
 
 ## Spoken commands
 
@@ -229,3 +266,5 @@ clean-up, but without compression" by starting from a recipe.
   place (plans in the console).
 - `OPEN:` (15) How should it behave on a small-context local model? Proposal: a reduced mode
   with the core tool set and recipes only, and an honest statement when a request needs more.
+  Tiered exposure already keeps the request small: the on-demand operations cost one line each
+  until they are asked for.

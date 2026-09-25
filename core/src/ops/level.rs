@@ -1,9 +1,10 @@
-//! Gain, DC removal and normalisation.
+//! Gain, DC removal, and normalisation to a peak or a loudness.
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use super::{copy_window, typed, with, Descriptor, Op, OpError, RenderOut};
+use crate::analysis::loudness::{gain_to_target, integrated_lufs};
 use crate::audio::AudioBuffer;
 use crate::dsp::window::ramp;
 use crate::math::{amp_to_db, db_to_amp, round_to};
@@ -228,6 +229,97 @@ impl Op for Normalise {
         let audio = apply_scoped_gain(input, offset, a, b, scope, clip_len, r.gain_db);
         let mut measurements = level_measurements(&before, &audio);
         measurements.insert("gain_db".into(), json!(round_to(r.gain_db, 3)));
+        Ok(RenderOut {
+            audio,
+            measurements,
+        })
+    }
+}
+
+// ---------------------------------------------------------------- loudness_normalise
+
+pub struct LoudnessNormalise {
+    pub desc: Descriptor,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoudnessParams {
+    target_lufs: f64,
+}
+
+#[derive(Deserialize)]
+struct LoudnessResolved {
+    measured_lufs: f64,
+    gain_db: f64,
+}
+
+impl Op for LoudnessNormalise {
+    fn descriptor(&self) -> &Descriptor {
+        &self.desc
+    }
+
+    fn resolve(
+        &self,
+        params: &Value,
+        scope: &Scope,
+        input: &AudioBuffer,
+    ) -> Result<Value, OpError> {
+        let p: LoudnessParams = typed(params)?;
+        let (s0, s1) = scope.samples(input.sample_rate, input.len());
+        let measured = integrated_lufs(input, s0, s1).ok_or_else(|| {
+            OpError::Invalid(
+                "cannot measure the loudness: the scope is shorter than 0.4 s, or nothing in it is louder than −70 LUFS".into(),
+            )
+        })?;
+        Ok(with(
+            params,
+            json!({ "measured_lufs": measured, "gain_db": gain_to_target(measured, p.target_lufs) }),
+        ))
+    }
+
+    fn radius(&self, _resolved: &Value, _sr: u32) -> usize {
+        0
+    }
+
+    fn render_linear(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        _decide: &AudioBuffer,
+        target: &AudioBuffer,
+    ) -> Result<Option<AudioBuffer>, OpError> {
+        let r: LoudnessResolved = typed(resolved)?;
+        let len = target.len();
+        Ok(Some(apply_scoped_gain(
+            target, 0, 0, len as i64, scope, len, r.gain_db,
+        )))
+    }
+
+    fn render(
+        &self,
+        resolved: &Value,
+        scope: &Scope,
+        input: &AudioBuffer,
+        offset: i64,
+        a: i64,
+        b: i64,
+        clip_len: usize,
+    ) -> Result<RenderOut, OpError> {
+        let r: LoudnessResolved = typed(resolved)?;
+        let before = copy_window(input, offset, a, b);
+        let audio = apply_scoped_gain(input, offset, a, b, scope, clip_len, r.gain_db);
+        let mut measurements = level_measurements(&before, &audio);
+        measurements.insert("gain_db".into(), json!(round_to(r.gain_db, 3)));
+        // Measured on the whole scope when resolving; a fixed gain moves it exactly.
+        measurements.insert(
+            "loudness_before_lufs".into(),
+            json!(round_to(r.measured_lufs, 2)),
+        );
+        measurements.insert(
+            "loudness_after_lufs".into(),
+            json!(round_to(r.measured_lufs + r.gain_db, 2)),
+        );
         Ok(RenderOut {
             audio,
             measurements,

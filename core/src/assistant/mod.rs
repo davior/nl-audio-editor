@@ -11,7 +11,10 @@ pub mod route;
 pub mod speech;
 
 pub use parse::{parse_response, Proposal, ProposedStep};
-pub use prompt::{build_correction, build_request, AssistantContext, Turn, PROMPT_VERSION};
+pub use prompt::{
+    build_correction, build_expansion, build_request, AssistantContext, Turn, DESCRIBE_TOOL,
+    PROMPT_VERSION,
+};
 pub use route::{route, Route, RoutedStep, Selection};
 pub use speech::{listen_params, record_dictation, Dictation, Segment};
 
@@ -44,6 +47,77 @@ pub struct Exchange {
     /// The exchange this one asked the model to correct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corrects: Option<String>,
+    /// The exchange whose `describe_operations` call this one answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub describes: Option<String>,
+}
+
+/// Rounds already taken for one request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Rounds {
+    /// The model has been shown operations it asked to see.
+    pub described: bool,
+    /// The model has been asked to correct an answer.
+    pub corrected: bool,
+}
+
+/// What a model's answer calls for next.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "next", rename_all = "snake_case")]
+pub enum NextRound {
+    /// Use it: preview its steps, or show its words.
+    Done { proposal: Proposal },
+    /// Send `request`: the operations the model asked to see (`ids`). The
+    /// exchange it makes `describes` the one just logged.
+    Describe { request: Value, ids: Vec<String> },
+    /// Send `request`: the model is asked once to correct its answer. The
+    /// exchange it makes `corrects` the one just logged.
+    Correct {
+        request: Value,
+        problems: Vec<String>,
+    },
+    /// Nothing more to ask: show the problems.
+    Failed { problems: Vec<String> },
+}
+
+impl NextRound {
+    /// The problems to log with the exchange that brought this answer.
+    pub fn problems(&self) -> Option<Vec<String>> {
+        match self {
+            NextRound::Correct { problems, .. } | NextRound::Failed { problems } => {
+                Some(problems.clone())
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The policy for one request, the same in every front end: at most one round
+/// to show the model operations it asked to see, and one to correct an answer
+/// that cannot be used.
+pub fn next_round(request: &Value, response: &Value, rounds: Rounds) -> Result<NextRound, String> {
+    let fix = |problems: Vec<String>| -> Result<NextRound, String> {
+        if rounds.corrected {
+            Ok(NextRound::Failed { problems })
+        } else {
+            Ok(NextRound::Correct {
+                request: build_correction(request, response, &problems)?,
+                problems,
+            })
+        }
+    };
+    match parse_response(response) {
+        Ok(p) if p.describe.is_empty() => Ok(NextRound::Done { proposal: p }),
+        Ok(_) if rounds.described => fix(vec![format!(
+            "the operations were already described; call one of them instead of `{DESCRIBE_TOOL}`"
+        )]),
+        Ok(p) => Ok(NextRound::Describe {
+            request: build_expansion(request, response, &p.describe)?,
+            ids: p.describe,
+        }),
+        Err(problems) => fix(problems),
+    }
 }
 
 /// The request for a project as it stands: the analysis of what the stack
@@ -86,6 +160,9 @@ pub fn record_exchange<S: Store>(
     }
     if let Some(c) = &ex.corrects {
         data["corrects"] = json!(c);
+    }
+    if let Some(d) = &ex.describes {
+        data["describes"] = json!(d);
     }
     let ev = project.record(
         env,
@@ -156,6 +233,7 @@ mod tests {
                 latency_ms: 12,
                 problems: Some(problems.clone()),
                 corrects: None,
+                describes: None,
             },
         )
         .unwrap();
@@ -173,6 +251,7 @@ mod tests {
                 latency_ms: 9,
                 problems: None,
                 corrects: Some(first.clone()),
+                describes: None,
             },
         )
         .unwrap();
@@ -238,6 +317,109 @@ mod tests {
         });
     }
 
+    fn call(name: &str, args: Value) -> Value {
+        json!({ "choices": [{ "message": { "role": "assistant", "content": null,
+            "tool_calls": [{ "id": "call_1", "type": "function",
+                "function": { "name": name, "arguments": args.to_string() } }] } }] })
+    }
+
+    #[test]
+    fn one_round_to_describe_and_one_to_correct_then_the_problems_are_shown() {
+        let mut env = FixedEnv::default();
+        let mut p = project(&mut env);
+        let req = request_for(&mut p, "m-1", &[], "make it brighter", None).unwrap();
+        let ask = call(DESCRIBE_TOOL, json!({ "ids": ["tilt"] }));
+        let use_it = call(
+            "tilt",
+            json!({ "params": { "db_per_octave": 1.5 }, "scope": { "kind": "clip" } }),
+        );
+        let bad = call(
+            "tilt",
+            json!({ "params": { "db_per_octave": 9 }, "scope": { "kind": "clip" } }),
+        );
+        let r0 = Rounds::default();
+        let described = Rounds {
+            described: true,
+            ..r0
+        };
+        let both = Rounds {
+            described: true,
+            corrected: true,
+        };
+
+        // Asked to see tilt: the next request describes it and offers it as a tool.
+        let NextRound::Describe { request, ids } = next_round(&req, &ask, r0).unwrap() else {
+            panic!("expected a describe round");
+        };
+        assert_eq!(ids, ["tilt"]);
+        let named = |r: &Value, n: &str| {
+            r["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == n)
+        };
+        assert!(!named(&req, "tilt") && named(&request, "tilt"));
+        assert_eq!(next_round(&req, &ask, r0).unwrap().problems(), None);
+        // Then a usable answer is done.
+        let NextRound::Done { proposal } = next_round(&request, &use_it, described).unwrap() else {
+            panic!("expected a proposal");
+        };
+        assert_eq!(proposal.steps[0].op, "tilt");
+        // Asking to see operations again is a problem, corrected once.
+        assert!(matches!(
+            next_round(&request, &ask, described).unwrap(),
+            NextRound::Correct { .. }
+        ));
+        // An impossible value is corrected once, then shown.
+        let NextRound::Correct { problems, .. } = next_round(&request, &bad, described).unwrap()
+        else {
+            panic!("expected a correction");
+        };
+        assert!(problems[0].contains("db_per_octave"));
+        assert!(matches!(
+            next_round(&request, &bad, both).unwrap(),
+            NextRound::Failed { .. }
+        ));
+
+        // An exchange that answers a describe call is logged with the link.
+        let first = record_exchange(
+            &mut p,
+            &mut env,
+            &Exchange {
+                provider: "mock".into(),
+                model: "m-1".into(),
+                host: "example.test".into(),
+                request: req.to_string(),
+                response: ask.clone(),
+                latency_ms: 3,
+                problems: None,
+                corrects: None,
+                describes: None,
+            },
+        )
+        .unwrap();
+        record_exchange(
+            &mut p,
+            &mut env,
+            &Exchange {
+                provider: "mock".into(),
+                model: "m-1".into(),
+                host: "example.test".into(),
+                request: request.to_string(),
+                response: use_it,
+                latency_ms: 4,
+                problems: None,
+                corrects: None,
+                describes: Some(first.clone()),
+            },
+        )
+        .unwrap();
+        let last = p.log.events().last().unwrap().clone();
+        assert_eq!(last["data"]["describes"], json!(first));
+        assert_eq!(last["data"]["prompt_version"], json!(PROMPT_VERSION));
+    }
+
     #[test]
     fn an_exchange_carrying_sample_data_is_refused() {
         let mut env = FixedEnv::default();
@@ -258,6 +440,7 @@ mod tests {
                 latency_ms: 1,
                 problems: None,
                 corrects: None,
+                describes: None,
             },
         );
         assert!(r.is_err());

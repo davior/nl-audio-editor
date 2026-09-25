@@ -1,0 +1,25 @@
+{
+  "id": "shelf",
+  "version": 1,
+  "title": "Shelf EQ",
+  "summary": "Raise or lower everything below (low shelf) or above (high shelf) a corner frequency, with a smooth transition centred on it. Static and zero-phase.",
+  "category": "filters_eq",
+  "class": "corrective",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "kind", "title": "Shelf", "type": "enum", "values": ["low", "high"], "default": "low" },
+    { "id": "freq_hz", "title": "Corner", "type": "number", "unit": "Hz", "min": 20, "max": 20000, "step": 1, "required": true },
+    { "id": "gain_db", "title": "Gain", "type": "number", "unit": "dB", "min": -24, "max": 24, "step": 0.5, "required": true },
+    { "id": "transition_octaves", "title": "Transition", "type": "number", "unit": "octaves", "min": 0.25, "max": 4, "step": 0.25, "default": 1,
+      "help": "How far the change takes to build up, centred on the corner." }
+  ],
+  "identity": [{ "gain_db": 0 }],
+  "residual": "exact",
+  "measurements": [
+    { "id": "level_change_db", "title": "Level change", "unit": "dB" },
+    { "id": "shelf_level_before_db", "title": "Shelved band before", "unit": "dB" },
+    { "id": "shelf_level_after_db", "title": "Shelved band after", "unit": "dB" }
+  ],
+  "binding_hints": []
+}

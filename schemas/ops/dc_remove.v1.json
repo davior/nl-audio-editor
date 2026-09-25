@@ -5,6 +5,7 @@
   "summary": "Remove a constant offset (the mean of each channel), or a slowly drifting one.",
   "category": "gain_level",
   "class": "corrective",
+  "tier": "core",
   "scopes": ["clip", "time_range"],
   "params": [
     { "id": "mode", "title": "Mode", "type": "enum", "values": ["mean", "drift"], "default": "mean",

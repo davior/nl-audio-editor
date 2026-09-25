@@ -30,6 +30,26 @@ export function describe(s: Step): string {
     }
     case "insert_silence":
       return `inserts ${n("inserted_s", 3)} s of silence at ${n("at_s", 3)} s of the original`;
+    case "high_pass":
+      return `below ${n("cutoff_hz", 0)} Hz, ${n("slope_db_per_octave", 0)} dB/octave`;
+    case "low_pass":
+      return `above ${n("cutoff_hz", 0)} Hz, ${n("slope_db_per_octave", 0)} dB/octave`;
+    case "bell":
+      return `${(r.gain_db as number) > 0 ? "+" : ""}${n("gain_db")} dB at ${n("freq_hz", 0)} Hz, ${n("width_octaves")} octave wide`;
+    case "shelf":
+      return `${String(r.kind)} shelf ${(r.gain_db as number) > 0 ? "+" : ""}${n("gain_db")} dB at ${n("freq_hz", 0)} Hz`;
+    case "tilt":
+      return `${(r.db_per_octave as number) > 0 ? "+" : ""}${n("db_per_octave")} dB/octave around ${n("pivot_hz", 0)} Hz`;
+    case "gate":
+      return `below ${n("threshold_dbfs")} dBFS, down ${n("range_db", 0)} dB`;
+    case "loudness_normalise":
+      return `loudness → ${n("target_lufs")} LUFS (${n("gain_db", 2)} dB)`;
+    case "hum_reduce": {
+      const lines = (r.resolved_lines as unknown[] | undefined) ?? [];
+      return r.fundamental_hz == null
+        ? "no hum found"
+        : `${n("fundamental_hz", 2)} Hz hum, ${lines.length} harmonics −${n("depth_db", 0)} dB`;
+    }
     default:
       return "";
   }

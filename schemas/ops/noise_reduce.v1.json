@@ -5,6 +5,7 @@
   "summary": "Learn the noise from a quiet part of the clip and reduce everything that is no louder than that noise, across the whole scope. Only ever reduces.",
   "category": "noise_restoration",
   "class": "attenuative",
+  "tier": "core",
   "scopes": ["clip", "time_range", "band", "tf_patch"],
   "params": [
     { "id": "profile", "title": "Noise profile", "type": "time_range", "default": "auto",

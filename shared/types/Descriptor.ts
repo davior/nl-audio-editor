@@ -5,5 +5,6 @@ import type { OpClass } from "./OpClass";
 import type { ParamSpec } from "./ParamSpec";
 import type { ResidualKind } from "./ResidualKind";
 import type { ScopeKind } from "./ScopeKind";
+import type { ToolTier } from "./ToolTier";
 
-export type Descriptor = { id: string, version: number, title: string, summary: string, category: string, class: OpClass, system: boolean, scopes: Array<ScopeKind>, params: Array<ParamSpec>, identity: Array<Record<string, unknown>>, residual: ResidualKind, measurements: Array<MeasurementSpec>, binding_hints: Array<BindingHint>, };
+export type Descriptor = { id: string, version: number, title: string, summary: string, category: string, class: OpClass, system: boolean, tier: ToolTier, scopes: Array<ScopeKind>, params: Array<ParamSpec>, identity: Array<Record<string, unknown>>, residual: ResidualKind, measurements: Array<MeasurementSpec>, binding_hints: Array<BindingHint>, };

@@ -17,9 +17,9 @@ use crate::timeline;
 
 /// SHA-256 of the canonical resolved chain, then the render hash of its output.
 pub const EXPECTED_RESOLVED: &str =
-    "sha256:e2d18b971c09b233b9541d540d8d9c9a8f1f3bef12ca8cfb19a7b1e970f58689";
+    "sha256:59eacc620fbb00da58bc3117b4d26f2ec80b122ae6aab347323b8873b9f5ad8b";
 pub const EXPECTED_RENDER: &str =
-    "sha256:bd277ae3869db87492f7d5363029f11eee80bc7500d9ce587c512f850007c356";
+    "sha256:b0d1485daaee8ad2d1961cb73fba93e082497f259bf64dad054931f197292c5d";
 
 pub fn fixture_clip() -> AudioBuffer {
     let mut s = golden::spec_a();
@@ -59,6 +59,19 @@ pub fn run() -> (String, String) {
             "gain",
             json!({"gain_db": 2}),
             Scope::TimeRange { t0: 1.0, t1: 2.0 },
+        ),
+        ("high_pass", json!({"cutoff_hz": 70}), Scope::Clip),
+        ("hum_reduce", json!({}), Scope::Clip),
+        (
+            "bell",
+            json!({"freq_hz": 2500, "gain_db": 3}),
+            Scope::TimeRange { t0: 0.5, t1: 4.5 },
+        ),
+        ("gate", json!({}), Scope::Clip),
+        (
+            "loudness_normalise",
+            json!({"target_lufs": -20}),
+            Scope::Clip,
         ),
         (
             "remove_time",

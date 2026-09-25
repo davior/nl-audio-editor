@@ -16,6 +16,7 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - [16] **Spoken commands are streamed to Deepgram** — chosen by the product owner, 2026-09-25, in place of a local engine (Whisper): the user's dictated voice goes to Deepgram while the microphone is on; a project's audio never does.
 - **Deepgram may keep dictation to improve its models unless the user opts out** — chosen by the product owner, 2026-09-25: Deepgram's default and lower price; the setting sends `mip_opt_out=true`, which costs more and needs a paid account.
 - **Dictated words fill the console box, and the user sends them with Enter** — chosen by the product owner, 2026-09-25: a misheard "undo" cannot act on its own, and a correction is recorded next to what was heard.
+- **Loudness normalisation aims at −23 LUFS by default (EBU R128)** — chosen by the product owner, 2026-09-25: the broadcast reference; −16 LUFS, common for spoken word online, is one parameter away.
 
 ## Platform and architecture
 
@@ -56,6 +57,10 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Echo cancellation, noise suppression and gain control on for dictation, off for recordings** — dictation is not evidence and they help recognition; echo cancellation also keeps speaker playback out.
 - **Playback pauses while the microphone is open** — so a recording playing through the speakers is never streamed.
 - **Spoken forms are routed like typed ones** ("minus 1 dB", "1 point 5 seconds", "kilohertz") — a recogniser writes some numbers and units in words, and routine requests should not cost a model call. "Kilohertz" had lost its unit in typed requests too.
+- **Tool exposure is tiered by the descriptor's `tier`: `core` operations are always tools; each `on_demand` one is an index line, and its schema is sent when the model asks (`describe_operations`)** — the request stays small as the catalogue grows, and the model still sees everything it could use; the tier is registry data, so adding an operation changes no prompt code.
+- **At most one describe round and one correction round per request, decided in the core (`next_round`)** — a second request to see operations means the model is lost rather than short of information; the browser and the command line behave alike.
+- **The instructions with the index are prompt version 2** — the version recorded with each exchange keeps version-1 data distinguishable.
+- **The `plan` tool names every offered operation, core or on demand** — a plan may use an operation once it has been described, and the tool does not change between rounds.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations
@@ -79,6 +84,17 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Integer WAV export rounds to nearest without dither** — deterministic; float WAV is the default export.
 - **Clipping counted as flat-topped runs (≥ 3 equal samples near the peak)** — quiet evidential recordings rarely reach full scale, so a full-scale threshold would miss clipping.
 - **Quietest-region search tries 0.25, 0.5, 1, 1.5 and 2 s windows, shortest first, stable if its halves agree within 1 dB** — encodes "the quietest part, using the shortest sample that will work".
+- **EQ is static signed gains on the zero-phase engine, in a path of its own (`Reductions::Gains`)** — the EQs keep zero phase, locality and exact residuals; the cut-only operations keep a path that cannot boost at all.
+- **High- and low-pass follow a Butterworth magnitude, −3 dB at the cutoff, with a depth cap** — what engineers expect from a cutoff and a slope, without the filter's phase shift; the cap keeps deep cuts finite and makes 0 dB the identity.
+- **Bells and shelves are raised cosines in octaves** — smooth, and finite: a bell ends a whole width from its centre, and nothing beyond it is touched.
+- **An EQ's analysis size follows the finest feature of its curve (at least 10 bins across it), 2048–32768 points at 48 kHz** — an 80 Hz high-pass needs fine bins; larger sizes only cost time and reach.
+- **The gate's range defaults to 12 dB, not silence** — dead silence between words misrepresents a recording and sounds processed; some room tone keeps it honest. `auto` puts the threshold 6 dB above the scope's noise floor (the 10th percentile of its 10 ms levels).
+- **The gate opens ahead of the level rising (`attack_ms`)** — it works on the whole recording, not in real time, so it can open before a word starts and never clips an onset.
+- **Gate after noise reduction when faint voices matter** — on the raw golden mix it lowers the background voice by 1.3 dB, whose level sits near the noise.
+- **`hum_reduce` is separate from `line_reduce`, and "remove the hum" stays `line_reduce`** — `line_reduce` cuts only lines that stand out, as far as they do; `hum_reduce` cuts the mains frequency and each harmonic by a set depth, even under speech. The agreed reference workflow uses `line_reduce`.
+- **`hum_reduce` measures the mains frequency from the lines found; with `auto` and no hum found it cuts nothing** — the mains drifts from 50 or 60 Hz, and the error multiplies at each harmonic; cutting where there is no hum only removes signal.
+- **`hum_reduce`'s analysis is fine enough for each cut to span four bins, up to 65536 points** — at 16384 points the golden hum came down only 16.6 dB; at 65536, 27.7 dB.
+- **`loudness_normalise` is a fixed gain; peaks it pushes over the ceiling are left to the final limiter** — it resolves once, like `normalise`, and the limiter is always there.
 
 ## Data, privacy and training
 

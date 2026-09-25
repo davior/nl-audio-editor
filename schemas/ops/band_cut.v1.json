@@ -5,6 +5,7 @@
   "summary": "Cut the level between two frequencies by a fixed amount, with soft edges. Static and zero-phase.",
   "category": "filters_eq",
   "class": "attenuative",
+  "tier": "core",
   "scopes": ["clip", "time_range"],
   "params": [
     { "id": "f_lo", "title": "From", "type": "number", "unit": "Hz", "min": 1, "max": 96000, "step": 1, "required": true },

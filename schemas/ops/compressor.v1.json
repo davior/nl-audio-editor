@@ -5,6 +5,7 @@
   "summary": "Broadband compressor for speech: reduces the level above a threshold so quiet and loud passages come closer together.",
   "category": "gain_level",
   "class": "corrective",
+  "tier": "core",
   "scopes": ["clip", "time_range"],
   "params": [
     { "id": "threshold_dbfs", "title": "Threshold", "type": "number", "unit": "dBFS", "min": -80, "max": 0, "step": 0.5, "default": -24 },

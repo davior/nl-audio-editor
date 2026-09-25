@@ -224,6 +224,66 @@ tests in about 50 s):
 the box is composed from what was typed and what was heard; the stream's address never carries
 the key.
 
+### The catalogue (M2, part 1)
+
+**Invariants.** The eight new operations join the invariant tests above. Each identity setting
+renders bit-identical output, including a bell, shelf or tilt at 0 dB, which goes through the
+signed path. Locality, preview = final render and determinism hold for each. The attenuative
+ones (`high_pass`, `low_pass`, `gate`, `hum_reduce`) never raise a cell. The registry now holds
+20 descriptors for 19 operations; out-of-range values are refused, and so is a low-pass at or
+above half the sample rate.
+
+**Curves** (`ops/eq.rs`):
+- As formulas: at 24 dB per octave a high-pass is 3.01 dB down at its cutoff and 48.16 dB down
+  two octaves below, and never deeper than its limit. A bell has its full gain at the centre,
+  half of it half a width away, none a width away. A shelf has half its gain at the corner. A
+  tilt changes nothing at the pivot and stops at its cap.
+- Rendered on sines at 48 kHz: an 80 Hz high-pass leaves 1 kHz within 0.05 dB, is 3 dB down at
+  80 Hz (± 0.5) and 24 dB down at 40 Hz (± 1); a 4 kHz low-pass likewise. A +6 dB bell is within
+  0.3 dB at its centre and 0.1 dB two octaves away; a shelf and a tilt are within 0.3 dB of
+  their curves.
+- The analysis is fine enough for the finest feature: 16384 points for an 80 Hz high-pass at
+  48 kHz, never more than 32768.
+
+**Golden clip A**, measured per component (2026-09-25):
+
+| Operation | Target | Measured |
+|---|---|---|
+| `high_pass` 80 Hz | rumble ≥ 12 dB down; voices within 0.5 dB | rumble −21.87 dB; voices 0.00 dB |
+| `hum_reduce` (auto) | hum ≥ 20 dB down; voices and the 750 / 3,150 Hz lines within 0.5 dB | hum −27.66 dB; foreground −0.21, background −0.13 dB; lines 0.00 dB |
+| `gate` (auto) | noise in the long pause ≥ 11 dB down; foreground within 1 dB | threshold −51.28 dBFS (noise floor −57.28); pause −11.21 dB; foreground −0.01 dB; background −1.32 dB |
+| `loudness_normalise` (default) | −23 ± 0.05 LUFS | −53.37 → −23.000 LUFS (+30.37 dB) |
+
+The gate lowers the faint background voice by 1.3 dB on the raw mix, whose noise sits close to
+it; after a noise reduction there is more room between the two.
+
+**The model's tools:**
+- The request carries the core tools, `plan` and `describe_operations`, the index in the
+  instructions, and prompt version 2. No on-demand operation is a tool until it is described.
+- A describe call parses to the ids asked for; an unknown or system id is a problem.
+- An expansion answers the describe call with the schemas and adds the tools. Any other call
+  in the same answer is answered as not run. Sample data is still refused.
+- The round policy: one describe round, one correction round, then the problems are shown. A
+  second describe call counts as an unusable answer.
+- A logged exchange keeps its `describes` link, and the chain verifies.
+- **Router:** a table of the catalogue phrases ("low cut", "high cut at 10 kHz", "remove the
+  mains hum", "normalise to −16 LUFS"…). What was understood before stays as it was: "normalise
+  to −1 dB" is a peak normalise, "boost it by 6 dB" a gain, "remove the hum" a `line_reduce`.
+  Short words count only as whole words, and too little to go on goes to the model.
+- **Command line:** `nlae ask "make it brighter"` with two saved answers (a describe call, then
+  a tilt). The second exchange `describes` the first, and only its request offers `tilt`. With
+  only the first saved answer, it stops and says the model asked to see tilt.
+- **Parity:** the chain now also runs a high-pass (70 Hz), hum removal, a +3 dB bell at 2.5 kHz
+  over 0.5–4.5 s, a gate and a loudness normalise (−20 LUFS) before the time edits. The
+  re-pinned hashes match natively and in WebAssembly.
+
+**End to end**, added to the console scenarios (all pass, 2026-09-25, with the scenarios
+above, 24 tests in about 85 s):
+
+| # | Scenario | Checks |
+|---|---|---|
+| 8 | "make it brighter" | The stand-in model first asks to see `tilt`, then proposes a tilt. Two exchanges are logged at prompt version 2: the first request offers `describe_operations` and not `tilt`; the second offers `tilt` and `describes` the first. The preview refers to the second. Once accepted, the step's actor is the model |
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the

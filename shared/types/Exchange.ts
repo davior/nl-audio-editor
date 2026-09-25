@@ -20,4 +20,8 @@ problems?: Array<string> | null,
 /**
  * The exchange this one asked the model to correct.
  */
-corrects?: string | null, };
+corrects?: string | null, 
+/**
+ * The exchange whose `describe_operations` call this one answers.
+ */
+describes?: string | null, };

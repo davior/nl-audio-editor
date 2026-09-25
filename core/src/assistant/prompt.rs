@@ -2,6 +2,11 @@
 //! the analysis, a summary of the stack, the selection, and the registry's
 //! operations as tools. No function here takes audio, so samples cannot end
 //! up in a request; a check on every request backs that up.
+//!
+//! Tool exposure is tiered, so requests stay small as the catalogue grows:
+//! the core operations are tools, every other operation is a line in the
+//! instructions, and the model calls `describe_operations` to see one's
+//! parameters (`build_expansion` answers it).
 
 use std::collections::BTreeMap;
 
@@ -11,12 +16,17 @@ use serde_json::{json, Value};
 use super::route::Selection;
 use crate::analysis::Features;
 use crate::dataset::analysis_summary;
+use crate::ops::descriptor::ToolTier;
 use crate::ops::{registry, Descriptor};
 use crate::project::step::Step;
 use crate::scope::Scope;
 
 /// Recorded with every exchange, so a change of wording is visible in the data.
-pub const PROMPT_VERSION: u32 = 1;
+/// Version 2: tiered tools, with the index of further operations.
+pub const PROMPT_VERSION: u32 = 2;
+
+/// The tool the model calls to see the parameters of operations in the index.
+pub const DESCRIBE_TOOL: &str = "describe_operations";
 
 pub const SYSTEM_PROMPT: &str = "You are the assistant in an audio editor for spoken-word, field and evidential \
 recordings. The user describes what they want; you choose operations from the tools provided and set their \
@@ -89,11 +99,41 @@ pub fn offered() -> Vec<&'static Descriptor> {
     latest.into_values().collect()
 }
 
-/// The tools: one per offered operation, and `plan` for several together.
+/// Offered operations the model is shown only in the index.
+pub fn on_demand() -> Vec<&'static Descriptor> {
+    offered()
+        .into_iter()
+        .filter(|d| d.tier == ToolTier::OnDemand)
+        .collect()
+}
+
+/// The instructions: the system prompt, then one line per operation the model
+/// can ask to see. Dataset records use the same text.
+pub fn system_message() -> String {
+    let more = on_demand();
+    if more.is_empty() {
+        return SYSTEM_PROMPT.to_string();
+    }
+    let lines: Vec<String> = more
+        .iter()
+        .map(|d| format!("- {}: {}. {}", d.id, d.title, d.summary))
+        .collect();
+    format!(
+        "{SYSTEM_PROMPT}\n\nMore operations, not among the tools. To use one, first call `{DESCRIBE_TOOL}` with its id to see its parameters; then call it.\n{}",
+        lines.join("\n")
+    )
+}
+
+/// The tools: one per core operation, `plan` for several together, and
+/// `describe_operations` for the rest.
 pub fn tools() -> Vec<Value> {
     let ops = offered();
     let names: Vec<&str> = ops.iter().map(|d| d.id.as_str()).collect();
-    let mut tools: Vec<Value> = ops.iter().map(|d| d.tool_schema()).collect();
+    let mut tools: Vec<Value> = ops
+        .iter()
+        .filter(|d| d.tier == ToolTier::Core)
+        .map(|d| d.tool_schema())
+        .collect();
     tools.push(json!({
         "type": "function",
         "function": {
@@ -121,6 +161,29 @@ pub fn tools() -> Vec<Value> {
             }
         }
     }));
+    let more: Vec<&str> = on_demand().iter().map(|d| d.id.as_str()).collect();
+    if !more.is_empty() {
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": DESCRIBE_TOOL,
+                "description": "See the parameters of operations listed in the instructions, before using them.",
+                "parameters": {
+                    "type": "object",
+                    "required": ["ids"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": { "type": "string", "enum": more }
+                        }
+                    }
+                }
+            }
+        }));
+    }
     tools
 }
 
@@ -166,7 +229,7 @@ pub fn build_request(
     // The context becomes text in the user's message, so it is checked while
     // it is still structured.
     check_no_audio(&serde_json::to_value(ctx).map_err(|e| e.to_string())?)?;
-    let mut messages = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
+    let mut messages = vec![json!({ "role": "system", "content": system_message() })];
     let recent = history.len().saturating_sub(8);
     for t in &history[recent..] {
         let role = if t.role == "assistant" {
@@ -223,6 +286,51 @@ pub fn build_correction(
     Ok(req)
 }
 
+/// A follow-up answering a `describe_operations` call: the earlier request and
+/// response are replayed, the call is answered with the operations' tool
+/// schemas, and those operations become tools. Any other call in the same
+/// answer is answered as not run, to be made again.
+pub fn build_expansion(request: &Value, response: &Value, ids: &[String]) -> Result<Value, String> {
+    let reg = registry();
+    let schemas = ids
+        .iter()
+        .map(|id| {
+            reg.latest(id)
+                .map(|op| op.descriptor().tool_schema())
+                .map_err(|_| format!("`{id}` is not an operation in the registry"))
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+    let mut req = request.clone();
+    let message = response["choices"][0]["message"].clone();
+    let calls = message["tool_calls"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut messages = req["messages"].as_array().cloned().unwrap_or_default();
+    messages.push(message);
+    let described = serde_json::to_string(&schemas).map_err(|e| e.to_string())?;
+    for c in calls {
+        let content = if c["function"]["name"] == DESCRIBE_TOOL {
+            described.clone()
+        } else {
+            "Not run: the operations asked for are described alongside; call again.".to_string()
+        };
+        messages.push(json!({ "role": "tool", "tool_call_id": c["id"], "content": content }));
+    }
+    req["messages"] = Value::Array(messages);
+    let tools = req["tools"].as_array().cloned().unwrap_or_default();
+    let mut tools = tools;
+    for s in schemas {
+        let name = &s["function"]["name"];
+        if !tools.iter().any(|t| &t["function"]["name"] == name) {
+            tools.push(s);
+        }
+    }
+    req["tools"] = Value::Array(tools);
+    check_no_audio(&req)?;
+    Ok(req)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,7 +345,11 @@ mod tests {
     fn requests_carry_words_numbers_and_tools_only() {
         let req = build_request("deepseek-chat", &ctx(), &[], "the hum is distracting").unwrap();
         let msgs = req["messages"].as_array().unwrap();
-        assert_eq!(msgs[0]["content"], SYSTEM_PROMPT);
+        assert_eq!(msgs[0]["content"], system_message());
+        assert!(msgs[0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with(SYSTEM_PROMPT));
         let user = msgs[1]["content"].as_str().unwrap();
         assert!(user.starts_with("the hum is distracting\n\nAnalysis: {"));
         assert!(user.contains("Stack: []") && user.ends_with("Selection: none"));
@@ -257,7 +369,47 @@ mod tests {
             1,
             "latest version only"
         );
+        // Tiered: the core operations are tools; the rest are listed, to be described on request.
+        assert!(names.contains(&DESCRIBE_TOOL));
+        for id in [
+            "high_pass",
+            "bell",
+            "gate",
+            "hum_reduce",
+            "loudness_normalise",
+        ] {
+            assert!(!names.contains(&id), "{id} is on demand, not a tool");
+            assert!(
+                msgs[0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("\n- {id}: ")),
+                "{id} is in the index"
+            );
+        }
         assert!(check_no_audio(&req).is_ok());
+    }
+
+    #[test]
+    fn an_expansion_answers_the_describe_call_and_adds_the_tools() {
+        let req = build_request("m", &ctx(), &[], "make it brighter").unwrap();
+        let args = json!({ "ids": ["tilt"] }).to_string();
+        let resp = json!({ "choices": [{ "message": { "role": "assistant", "content": null,
+            "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": DESCRIBE_TOOL, "arguments": args } }] } }] });
+        let next = build_expansion(&req, &resp, &["tilt".to_string()]).unwrap();
+        let msgs = next["messages"].as_array().unwrap();
+        let last = msgs.last().unwrap();
+        assert_eq!(last["role"], "tool");
+        assert_eq!(last["tool_call_id"], "call_1");
+        assert!(last["content"].as_str().unwrap().contains("db_per_octave"));
+        let names: Vec<&str> = next["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names.iter().filter(|n| **n == "tilt").count(), 1);
+        assert!(build_expansion(&req, &resp, &["no_such_op".to_string()]).is_err());
     }
 
     #[test]

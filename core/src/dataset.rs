@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::analysis::{Features, FEATURES_VERSION};
-use crate::assistant::prompt::{user_message, AssistantContext, SYSTEM_PROMPT};
+use crate::assistant::prompt::{system_message, user_message, AssistantContext};
 use crate::hash::sha256;
 use crate::ops::registry;
 use crate::project::stack::PreviewRecord;
@@ -202,7 +202,7 @@ fn chat_record(
     let args = json!({ "params": step.params, "scope": step.scope });
     let mut record = json!({
         "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
+            { "role": "system", "content": system_message() },
             { "role": "user", "content": user_message(intent, &ctx) },
             { "role": "assistant", "content": step.rationale, "tool_calls": [{
                 "id": format!("call_{}", step.step_id),

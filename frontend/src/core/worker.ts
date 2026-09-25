@@ -2,17 +2,19 @@
 // The core runs here, off the main thread: decoding, analysis, rendering and
 // every change to a project. The page only draws and plays what comes back.
 import * as Comlink from "comlink";
-import init, { WasmProject, parity, descriptors, route, parse_response, correction_request, listen_params } from "../core-wasm/nlae.js";
+import init, { WasmProject, parity, descriptors, route, next_round, listen_params } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
 import type {
   Dictation,
   EditMap,
   Exchange,
+  NextRound,
   Pcm,
   PreviewRecord,
   PreviewResult,
   ProjectSummary,
   Proposal,
+  Rounds,
   Route,
   RoutedStep,
   Selection,
@@ -130,13 +132,10 @@ const api = {
     await ready;
     return route(words, selection);
   },
-  async parseResponse(response: string): Promise<{ proposal?: Proposal; problems?: string[] }> {
+  /** What a model's answer calls for next, by the core's policy: use it, send a follow-up (JSON text), or give up. */
+  async nextRound(request: string, response: string, rounds: Rounds): Promise<NextRound> {
     await ready;
-    return parse_response(response);
-  },
-  async correctionRequest(request: string, response: string, problems: string[]): Promise<string> {
-    await ready;
-    return correction_request(request, response, problems);
+    return next_round(request, response, rounds);
   },
   /** The query for streaming dictation, as `[name, value]` pairs; the key is not part of it. */
   async listenParams(model: string, language: string, sampleRate: number, optOut: boolean): Promise<[string, string][]> {

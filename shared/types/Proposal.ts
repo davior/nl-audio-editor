@@ -16,4 +16,10 @@ text: string | null,
 /**
  * Several operations to be accepted together.
  */
-plan: boolean, };
+plan: boolean, 
+/**
+ * Operations the model asked to see (`describe_operations`) before
+ * choosing. When there are any, nothing else in the answer is acted on:
+ * the operations are described and the model asked again.
+ */
+describe?: Array<string>, };
