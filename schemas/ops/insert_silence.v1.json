@@ -1,0 +1,24 @@
+{
+  "id": "insert_silence",
+  "version": 1,
+  "title": "Insert silence",
+  "summary": "Insert digital silence into the output at a point of the original recording; the output becomes longer. Nothing is invented. Applied to the result, just before the final limiter.",
+  "category": "editing",
+  "class": "edit",
+  "scopes": ["clip"],
+  "params": [
+    { "id": "at_s", "title": "At", "type": "number", "unit": "s", "min": 0, "max": 86400, "step": 0.001, "required": true,
+      "help": "Where to insert, in seconds of the original recording: 0 is the start, the recording's length is the end." },
+    { "id": "duration_s", "title": "Length", "type": "number", "unit": "s", "min": 0.001, "max": 3600, "step": 0.001, "required": true,
+      "help": "How much silence to insert." },
+    { "id": "fade_ms", "title": "Fades", "type": "number", "unit": "ms", "min": 0, "max": 50, "step": 0.5, "default": 5,
+      "help": "The audio fades out before the silence and back in after it, so neither edge clicks. 0 leaves the edges hard." }
+  ],
+  "identity": [],
+  "residual": "n/a",
+  "measurements": [
+    { "id": "inserted_s", "title": "Inserted", "unit": "s" },
+    { "id": "output_duration_s", "title": "Output length", "unit": "s" }
+  ],
+  "binding_hints": []
+}

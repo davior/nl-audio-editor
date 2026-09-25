@@ -5,6 +5,7 @@ import * as Comlink from "comlink";
 import init, { WasmProject, parity, descriptors, route, parse_response, correction_request } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
 import type {
+  EditMap,
   Exchange,
   Pcm,
   PreviewRecord,
@@ -184,6 +185,9 @@ const api = {
     const p = get(id);
     p.remove_top();
     return summary(p);
+  },
+  async editMap(id: string): Promise<EditMap> {
+    return get(id).edit_map() as EditMap;
   },
   async rateStack(id: string, overall: number, note?: string): Promise<ProjectSummary> {
     const p = get(id);

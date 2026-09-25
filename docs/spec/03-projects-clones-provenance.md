@@ -60,7 +60,7 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `step.annotated` | step id, note, labels |
 | `stack.rated` | target (step, plan or stack), overall 1–5, optional dimensions, note |
 | `recipe.saved` / `recipe.replayed` | recipe hash, range, mode, dry-run diff |
-| `render.exported` | file name, format, stack hash (with the final limiter), output hash, limiter measurements, the file's SHA-256 |
+| `render.exported` | file name, format, stack hash (with the final limiter), output hash, limiter measurements, the file's SHA-256, the output's length, and where time was removed or silence inserted (in the original's and the output's time) |
 | `dataset.exported` | options, manifest hash |
 | `project.clone_made` | child project id, fork step (in the parent's log) |
 | `project.cloned_from` | parent id, parent head, fork step and its event hash, inherited steps (first event of the clone) |

@@ -60,6 +60,12 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **`line_reduce` v2: a detected line must also stand out in the speech pauses** (or, with under 1 s of pause, be present in ≥ 90% of the clip) — hum and whines continue through pauses, voice harmonics do not; found on the 12 s golden clip, agreed with the product owner 2026-09-24.
 - **A change to what `auto` resolves to is a new operation version; the old version stays** — a recorded recipe must replay as it did. `line_reduce` v1 remains registered; the built-in recipe moves to v2 (`builtin:spoken-word-cleanup`, with v1 as `builtin:spoken-word-cleanup@1`); features move to version 2.
 - **Out-of-range parameters are rejected, not clamped** — a silent clamp would record a value the user never chose.
+- **Time edits (`remove_time`, `insert_silence`) are applied to the output, after all processing and before the final limiter, with every position in the original's time** — chosen by the product owner, 2026-09-24. Processing steps keep the whole timeline, so scopes never shift and residuals, previews and caches stay exact. A normalise measures the whole recording, including stretches that will be removed (a known limit).
+- **Inserted time is digital silence** — chosen by the product owner, 2026-09-24. Nothing is invented in evidential material; generated room tone could come later, marked as synthetic.
+- **Joins fade over 5 ms by default, and only kept audio is used** — a hard join clicks; a crossfade would blend in audio that was removed. `fade_ms` 0 gives an exact hard join.
+- **Exported WAVs carry a cue marker at each time edit, labelled in the original's time** — chosen by the product owner, 2026-09-24. Anyone opening the file sees where it was edited. The log records the same.
+- **A time edit is previewed on its own, opening on *Before*** — its result has a different length, so it can't be drawn on the original's timeline; *Processed* plays it.
+- **Time edits are not saved in recipes** — they belong to one recording; replaying them on another clip would cut arbitrary stretches.
 - **Limiter always appended by the renderer, ceiling −1 dBFS** — required by the brief; bit-exact passthrough when nothing exceeds the ceiling.
 - **Integer WAV export rounds to nearest without dither** — deterministic; float WAV is the default export.
 - **Clipping counted as flat-topped runs (≥ 3 equal samples near the peak)** — quiet evidential recordings rarely reach full scale, so a full-scale threshold would miss clipping.

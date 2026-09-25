@@ -101,6 +101,36 @@ reconstruction class).
 Voice isolation, speaker separation, stem blending, ducking. Reconstruction class: labelled
 processed, not factual. `OPEN:` which local models, under what licences (brief question 4).
 
+## Time edits — **built**
+
+These operations change the output's length. The processing never sees them:
+- every other step still works on the whole original timeline, so scopes never shift and
+  residuals stay exact;
+- the edits are applied to the processed result, just before the final limiter;
+- every position is in seconds of the original recording, so their order does not matter
+  (silences inserted at one point keep the order they were made in).
+
+Class `edit`, category `editing`, residual `n/a`.
+
+| Operation | Status | Notes |
+|---|---|---|
+| `remove_time` | **built** | Scope `time_range`: that stretch is left out of the output. `fade_ms` 0–50 (5): the audio fades out before the join and back in after it, so the join doesn't click; 0 joins the samples directly. |
+| `insert_silence` | **built** | `at_s` (seconds of the original; 0 is the start, the recording's length is the end) and `duration_s` 0.001–3600: digital silence, nothing invented. `fade_ms` 0–50 (5) on the audio either side. |
+
+- **What resolving records:** the exact samples (`s0`/`s1`, or `at_sample`/`samples`) and the
+  fade in samples.
+- **Overlaps and nesting:**
+  - removals that overlap or touch merge, fading by the largest of their fades;
+  - a silence inserted inside a removed stretch goes at its join.
+- **Kept audio is untouched:** it is copied exactly, except within the fades.
+- **Preview:** an edit is previewed on its own, with 3 s of audio either side.
+  - *Before* is the original timeline, with the stretch marked.
+  - *Processed* is the joined result.
+  - *Residual* is the removed audio, where it was.
+- **Exports:** a cue marker at each edit, labelled in the original's time, e.g. `removed
+  12.000-15.500 s of the original (3.500 s)`.
+- **Recipes:** edits are not saved in them, because they belong to one recording.
+
 ## Time and pitch (M3+)
 
 Time stretch, pitch shift, formant shift, gap compression, alignment, crossfade. Residual
@@ -143,4 +173,5 @@ and its limits stated alongside every result:
 ## Selection, scope and utility
 
 Scopes (`clip`, `time_range`, `band`, `tf_patch`) — **built**. Render and export (WAV float,
-PCM 16/24) — **built** in the command-line tool. Capability discovery (M1).
+PCM 16/24, with cue markers at time edits) — **built** in the command-line tool and the
+browser. Capability discovery (M1).

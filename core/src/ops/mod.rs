@@ -12,6 +12,7 @@
 
 pub mod compressor;
 pub mod descriptor;
+pub mod edit;
 pub mod level;
 pub mod limiter;
 pub mod mask;
@@ -128,6 +129,8 @@ const DESCRIPTORS: &[&str] = &[
     include_str!("../../../schemas/ops/line_reduce.v2.json"),
     include_str!("../../../schemas/ops/band_cut.v1.json"),
     include_str!("../../../schemas/ops/spectral_compressor.v1.json"),
+    include_str!("../../../schemas/ops/remove_time.v1.json"),
+    include_str!("../../../schemas/ops/insert_silence.v1.json"),
 ];
 
 fn build(desc: Descriptor) -> Box<dyn Op> {
@@ -141,6 +144,8 @@ fn build(desc: Descriptor) -> Box<dyn Op> {
         ("line_reduce", 1 | 2) => Box::new(spectral::LineReduce { desc }),
         ("band_cut", 1) => Box::new(spectral::BandCut { desc }),
         ("spectral_compressor", 1) => Box::new(spectral::SpectralCompressor { desc }),
+        ("remove_time", 1) => Box::new(edit::RemoveTime { desc }),
+        ("insert_silence", 1) => Box::new(edit::InsertSilence { desc }),
         (id, v) => panic!("descriptor {id} v{v} has no implementation"),
     }
 }

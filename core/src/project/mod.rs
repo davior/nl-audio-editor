@@ -29,6 +29,7 @@ use crate::hash::{sha256, ZERO_HASH};
 use crate::ops::{registry, OpError};
 use crate::provenance::{Actor, AppInfo, Env, EventLog, Verification};
 use crate::scope::Scope;
+use crate::timeline;
 pub use stack::{PreviewRecord, StackState};
 pub use step::{Binding, BindingSource, Origin, StateSnapshot, Step, StepDraft};
 use store::{MemStore, Store, StoreError};
@@ -37,6 +38,8 @@ pub const FORMAT: &str = "nlae-project";
 pub const FORMAT_VERSION: u32 = 1;
 /// Default preview length.
 pub const PREVIEW_S: f64 = 10.0;
+/// Seconds of audio either side of a time edit in its preview.
+pub const EDIT_CONTEXT_S: f64 = 3.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
@@ -223,6 +226,10 @@ pub struct FinalRender {
     pub stack_hash: String,
     pub output_hash: String,
     pub limiter: Map<String, Value>,
+    /// Where time was removed or silence inserted (seconds; empty without time edits).
+    pub edits: Value,
+    /// Cue markers for an exported file: output sample and label.
+    pub cues: Vec<(u32, String)>,
 }
 
 pub struct Project<S: Store> {
@@ -752,6 +759,19 @@ impl<S: Store> Project<S> {
                 }
                 Ok(&self.renders[&key].0)
             }
+            "output" => {
+                let layout = self.edit_layout();
+                if layout.is_identity() {
+                    return self.audio("stack");
+                }
+                let key = format!("output:{}", self.state.stack_hash);
+                if !self.renders.contains_key(&key) {
+                    let processed = self.audio("stack")?.clone();
+                    let out = layout.apply(&processed);
+                    self.renders.insert(key.clone(), (out, Map::new()));
+                }
+                Ok(&self.renders[&key].0)
+            }
             "residual" => {
                 let key = format!("residual:{}", self.state.stack_hash);
                 if !self.renders.contains_key(&key) {
@@ -760,7 +780,9 @@ impl<S: Store> Project<S> {
                 }
                 Ok(&self.renders[&key].0)
             }
-            w => invalid(format!("unknown render `{w}` (source | stack | residual)")),
+            w => invalid(format!(
+                "unknown render `{w}` (source | stack | output | residual)"
+            )),
         }
     }
 
@@ -821,6 +843,18 @@ impl<S: Store> Project<S> {
 
     fn default_window(&self, drafts: &[StepDraft]) -> (f64, f64) {
         let dur = self.source.duration_s();
+        // A time edit: its join, with some of the audio either side.
+        if let Some(d) = drafts.first().filter(|d| timeline::is_edit(&d.op)) {
+            let (t0, t1) = d
+                .scope
+                .time()
+                .or_else(|| d.params["at_s"].as_f64().map(|t| (t, t)))
+                .unwrap_or((0.0, 0.0));
+            return (
+                (t0 - EDIT_CONTEXT_S).max(0.0),
+                (t1 + EDIT_CONTEXT_S).min(dur),
+            );
+        }
         let t0 = drafts
             .first()
             .and_then(|d| d.scope.time())
@@ -918,6 +952,10 @@ impl<S: Store> Project<S> {
         } else {
             None
         };
+        let edit = drafts.iter().any(|d| timeline::is_edit(&d.op));
+        if edit && drafts.len() > 1 {
+            return invalid("a time edit is previewed on its own, not in a plan");
+        }
         let mut steps = self.resolve_drafts(env, &base, &drafts, plan_id.clone())?;
         let dur = self.source.duration_s();
         let (t0, t1) = opts.window.unwrap_or_else(|| self.default_window(&drafts));
@@ -929,16 +967,64 @@ impl<S: Store> Project<S> {
             self.source.time_to_sample(t0) as i64,
             self.source.time_to_sample(t1) as i64,
         );
-        let before = engine::render_window(&self.source, &base, a, b)?;
-        let mut chain = base.clone();
-        let mut output = before.clone();
-        for s in steps.iter_mut() {
-            chain.push(s.render_step());
-            let (w, m) = engine::render_window_measured(&self.source, &chain, a, b)?;
-            s.measurements = m;
-            output = w;
-        }
-        let residual = engine::difference(&before, &output);
+        let (before, output, residual) = if edit {
+            // Processing is unchanged, so the window comes from the stack's
+            // (cached) render; the edit is applied to it, and the residual is
+            // what it leaves out, where it was.
+            let full = self.render_prefix(&base)?.0;
+            let before = full.extract_padded(a, b);
+            let mut chain = base.clone();
+            chain.push(steps[0].render_step());
+            let edits = timeline::edits(&[steps[0].render_step()]);
+            let local: Vec<timeline::Edit> = edits
+                .iter()
+                .map(|e| match *e {
+                    timeline::Edit::Remove { s0, s1, fade } => timeline::Edit::Remove {
+                        s0: (s0 as i64 - a).max(0) as usize,
+                        s1: (s1 as i64 - a).max(0) as usize,
+                        fade,
+                    },
+                    timeline::Edit::Insert { at, len, fade } => timeline::Edit::Insert {
+                        at: (at as i64 - a).max(0) as usize,
+                        len,
+                        fade,
+                    },
+                })
+                .collect();
+            let output = timeline::layout(&local, before.len()).apply(&before);
+            let mut residual =
+                AudioBuffer::silent(before.sample_rate, before.num_channels(), before.len());
+            if let Some(timeline::Edit::Remove { s0, s1, .. }) = local.first().copied() {
+                let (s0, s1) = (s0.min(before.len()), s1.min(before.len()));
+                for (r, b) in residual.channels.iter_mut().zip(&before.channels) {
+                    r[s0..s1].copy_from_slice(&b[s0..s1]);
+                }
+            }
+            let s = &mut steps[0];
+            let key = if s.op == timeline::REMOVE {
+                "removed_s"
+            } else {
+                "inserted_s"
+            };
+            s.measurements.insert(key.into(), s.resolved[key].clone());
+            s.measurements.insert(
+                "output_duration_s".into(),
+                json!(self.output_duration_s(&chain)),
+            );
+            (before, output, residual)
+        } else {
+            let before = engine::render_window(&self.source, &base, a, b)?;
+            let mut chain = base.clone();
+            let mut output = before.clone();
+            for s in steps.iter_mut() {
+                chain.push(s.render_step());
+                let (w, m) = engine::render_window_measured(&self.source, &chain, a, b)?;
+                s.measurements = m;
+                output = w;
+            }
+            let residual = engine::difference(&before, &output);
+            (before, output, residual)
+        };
         let record = PreviewRecord {
             preview_id: env.new_id("pv"),
             kind: if is_plan {
@@ -1052,6 +1138,12 @@ impl<S: Store> Project<S> {
             let (output, meas) = self.render_prefix(&chain)?;
             h = step::next_stack_hash(&h, &s.render_step());
             s.measurements = meas;
+            if timeline::is_edit(&s.op) {
+                s.measurements.insert(
+                    "output_duration_s".into(),
+                    json!(self.output_duration_s(&chain)),
+                );
+            }
             s.output_hash = Some(output.render_hash());
             s.stack_hash = Some(h.clone());
             let after = self.snapshot(&output, &s.scope);
@@ -1155,17 +1247,38 @@ impl<S: Store> Project<S> {
     }
 
     /// The stack's output with the final limiter (always last).
+    /// Time edits are applied to the processed result, then the limiter.
     pub fn render_final(&mut self) -> Result<FinalRender> {
         let steps = self.render_steps();
         let (audio, _) = self.render_prefix(&steps)?;
+        let layout = self.edit_layout();
+        let audio = if layout.is_identity() {
+            audio
+        } else {
+            layout.apply(&audio)
+        };
         let lim = engine::final_limiter(Some(&self.manifest.final_limiter))?;
         let out = engine::render_full(&audio, std::slice::from_ref(&lim))?;
+        let sr = self.source.sample_rate;
         Ok(FinalRender {
             output_hash: out.audio.render_hash(),
             stack_hash: step::stack_hash(&self.state.stack_hash, std::slice::from_ref(&lim)),
             audio: out.audio,
             limiter: out.measurements.into_iter().next().unwrap_or_default(),
+            edits: layout.marks_json(sr),
+            cues: layout.cues(sr),
         })
+    }
+
+    /// Length of the output (seconds) that a chain of steps would give.
+    fn output_duration_s(&self, chain: &[RenderStep]) -> f64 {
+        let l = timeline::layout(&timeline::edits(chain), self.source.len());
+        crate::math::round_to(l.output_len() as f64 / self.source.sample_rate as f64, 6)
+    }
+
+    /// How the output is assembled from the original under the stack's time edits.
+    pub fn edit_layout(&self) -> timeline::Layout {
+        timeline::layout(&timeline::edits(&self.render_steps()), self.source.len())
     }
 
     /// Record an outward action (an export, a saved recipe, …).

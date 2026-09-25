@@ -176,7 +176,18 @@ impl Recipe {
                 st.steps.len()
             )));
         }
-        let steps = &st.steps[from..=to];
+        // Time edits belong to one recording: they are not carried to another.
+        let steps: Vec<Step> = st.steps[from..=to]
+            .iter()
+            .filter(|s| !crate::timeline::is_edit(&s.op))
+            .cloned()
+            .collect();
+        if steps.is_empty() {
+            return Err(ProjectError::Invalid(
+                "only time edits in that range: they belong to this recording and are not saved in recipes".into(),
+            ));
+        }
+        let steps = &steps[..];
         let origin = RecipeOrigin {
             project: project.id().to_string(),
             source_sha256: project.source_sha256().to_string(),

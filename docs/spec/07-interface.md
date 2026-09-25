@@ -152,15 +152,31 @@ When the proposal is accepted, rejected or set aside, the view returns to where 
 
 The preview's zoom is never saved as the project's view.
 
+**Time edits.**
+- **Making them:**
+  - *Remove this stretch* appears next to a time selection;
+  - *Insert … s of silence at the playhead* is in the same bar;
+  - both go through the console as if typed, so they are routed, previewed and logged with
+    their words.
+- **Previewing:** the preview opens on *Before*, the original's timeline, with the stretch or
+  insertion point marked. *Processed* plays the joined result, and *Residual* the removed
+  audio.
+- **On the lanes:** the lanes keep the original's timeline. Removed stretches are hatched,
+  and inserted silences are marked with their length.
+- **Playback:** *Processed* plays what will be exported. It skips removed stretches and pauses
+  the playhead during inserted silence.
+- **In the stack panel:** the output's length is shown next to the original's.
+
 **Settings.** Provider preset, address, model, provider name, key, *Remember on this device*,
 and *Test connection* (see `06-reasoning-layer.md`).
 
-**Export WAV.** 32-bit float, 24-bit or 16-bit. It exports the stack with the final limiter and
-is logged as `render.exported` with:
+**Export WAV.** 32-bit float, 24-bit or 16-bit. It exports the stack with its time edits and the
+final limiter, with a cue marker at each edit. It is logged as `render.exported` with:
 - the stack hash (with the limiter);
 - the output's render hash;
 - the limiter's measurements;
-- the file's SHA-256.
+- the file's SHA-256;
+- the output's length and where the time edits are.
 
 The file is identical to `nlae render` of the same stack, byte for byte (end-to-end test).
 

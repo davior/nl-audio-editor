@@ -1,5 +1,6 @@
 //! Cross-target parity. A short golden clip is resolved and rendered through
-//! every kind of operation, analysis included; the hash of the result is pinned
+//! every kind of operation, analysis included, then time edits are applied
+//! before the final limiter, as an export does; the hash of the result is pinned
 //! here. The native test suite and the WebAssembly test suite both assert it,
 //! so any arithmetic difference between the two builds fails one of them.
 
@@ -12,12 +13,13 @@ use crate::hash::sha256;
 use crate::ops::registry;
 use crate::provenance::jcs;
 use crate::scope::Scope;
+use crate::timeline;
 
 /// SHA-256 of the canonical resolved chain, then the render hash of its output.
 pub const EXPECTED_RESOLVED: &str =
-    "sha256:d42e73a5e15063f9d439317f1ad146687944fcbc8cc830419dc2f663fafaa8b1";
+    "sha256:e2d18b971c09b233b9541d540d8d9c9a8f1f3bef12ca8cfb19a7b1e970f58689";
 pub const EXPECTED_RENDER: &str =
-    "sha256:8060abc87eddc8245c2cf350e9809a74dfc9c283616fef73438610a19a3787b9";
+    "sha256:bd277ae3869db87492f7d5363029f11eee80bc7500d9ce587c512f850007c356";
 
 pub fn fixture_clip() -> AudioBuffer {
     let mut s = golden::spec_a();
@@ -58,6 +60,16 @@ pub fn run() -> (String, String) {
             json!({"gain_db": 2}),
             Scope::TimeRange { t0: 1.0, t1: 2.0 },
         ),
+        (
+            "remove_time",
+            json!({"fade_ms": 5}),
+            Scope::TimeRange { t0: 1.25, t1: 1.9 },
+        ),
+        (
+            "insert_silence",
+            json!({"at_s": 4.2, "duration_s": 0.3}),
+            Scope::Clip,
+        ),
         ("limiter", json!({}), Scope::Clip),
     ];
     let reg = registry();
@@ -80,6 +92,10 @@ pub fn run() -> (String, String) {
             resolved,
             scope,
         };
+        if op == "limiter" {
+            // As in an export: the time edits, then the limiter.
+            cur = timeline::layout(&timeline::edits(&steps), cur.len()).apply(&cur);
+        }
         cur = render_full(&cur, std::slice::from_ref(&step))
             .expect("renders")
             .audio;

@@ -147,6 +147,45 @@ In Rust:
   dataset chat record taken from the exchange;
 - `nlae ask`, both locally routed and through a saved model answer.
 
+### Time edits
+
+**End to end** (with the M0 and M1 scenarios, 17 tests; all pass, 2026-09-24):
+1. Select 4–6 s of the 12 s clip on the waveform and use *Remove this stretch*.
+   - The proposal previews on *Before*, with the stretch marked.
+   - Once accepted, the stretch is hatched and the output is 12 s minus the selection.
+2. On *Processed*, play from 3.8 s: the playhead passes 6.2 s within 1.8 s (playing through
+   would take 2.4 s), so playback skips the removed stretch.
+3. Insert 0.5 s of silence at the playhead (9 s), and accept.
+4. Export the WAV:
+   - its length is the original minus the removal plus 0.5 s;
+   - it has two cue markers, labelled in the original's time;
+   - its SHA-256 is the one logged, and the log lists both edits.
+5. Undo twice: the original length again, and nothing marked.
+
+**In Rust:**
+- **Layout:** overlapping removals merge; a silence inside a removed stretch goes at its join;
+  the order of edits doesn't matter; kept audio is exact outside the fades; fades are
+  symmetric at a join; removing everything leaves an empty output.
+- **Project:**
+  - processing is unchanged by the edits;
+  - the output is exact outside the fades, with the silence where it was inserted;
+  - the preview's residual is the removed audio, where it was;
+  - a reopened project gives the same export hash;
+  - undo restores the length;
+  - recipes refuse edit-only ranges;
+  - a time edit is previewed alone, and an insertion must fall inside the recording.
+- **WAV cue markers:** chunk sizes, the pad byte after an odd 24-bit data chunk, and
+  byte-identical files when there are no edits. Our own decoder still reads a file that has
+  markers.
+- **Router:** seconds, milliseconds, minutes and m:ss are understood. "Remove this part"
+  removes the selection; "remove the hum here" still cuts the hum; "cut 3,100 to 3,200 Hz"
+  stays a band cut.
+- **Command line:** `nlae ask "remove 2 to 3 seconds"` and "insert 0.5 s of silence at 6 s",
+  then `nlae render`: the length, the cue chunk, the printed marks and the logged edits are
+  checked.
+- **Parity:** the chain now removes and inserts time before the final limiter. The re-pinned
+  hashes match natively and in WebAssembly.
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the

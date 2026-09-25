@@ -94,8 +94,13 @@ predictable. It is deterministic and tested with a table of cases.
 | "normalise to −1 dB", "turn it up by 3 dB" | `normalise`, `gain` |
 | "remove the hum", "reduce the noise", "remove the DC offset" | `line_reduce` (40–1,000 Hz), `noise_reduce`, `dc_remove` |
 | "compress the bangs here", "tame the whine in this area" | `spectral_compressor` on the selected area (transient, tonal or level mode from the words) |
+| "remove 12 to 15.5 seconds", "cut from 1:20 to 1:35", "trim the first 5 seconds" | `remove_time` for that stretch |
+| "remove this part", "cut the selection out" (with a time selection, naming nothing to process) | `remove_time` for the selected stretch |
+| "insert 2 seconds of silence at 30 s", "add a 500 ms gap at 1:05", "add 1 s of silence here" | `insert_silence` there (seconds, milliseconds, minutes and m:ss are understood) |
 
 - "Here", "this part" or "the selection" makes the selection the scope.
+- "Remove this part" removes time only when the words name nothing to process: "remove the
+  hum here" cuts the hum in the selection.
 - A named target beats the clean-up recipe: "clean up the hum" cuts the hum.
 - Anything else goes to the model.
 
