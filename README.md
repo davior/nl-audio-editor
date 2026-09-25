@@ -113,6 +113,9 @@ to 3,200 Hz by 12 dB", or, with an area selected on the spectrogram, "compress t
 Each proposal is previewed on a short window (Original / Before / Processed / Residual) and
 waits for *Accept* or *Reject*.
 
+To speak instead of typing, use *Speak* beside *Send*. The words appear in the box as they are
+recognised, and nothing happens until you press Enter, so you can correct them first.
+
 To take a stretch out of the recording, select it on the waveform and use *Remove this
 stretch*; to add a pause, click where it should go and use *Insert … s of silence* (or type
 "remove 12 to 15.5 seconds", "insert 2 s of silence at 30 s"). The original is untouched: the
@@ -128,6 +131,14 @@ project.
 - **Ollama** must allow the app's addresses:
   `OLLAMA_ORIGINS=http://localhost:5173,http://localhost:4173 ollama serve`.
 - **On the command line**, `nlae ask` reads the key from `DEEPSEEK_API_KEY`.
+
+**Speech.** *Speak* streams your voice to Deepgram, which sends the words back.
+- Add a Deepgram key under *Settings → Speech*; *Test connection* checks it.
+- Playback pauses while the microphone is on, so a recording is never sent.
+- By default Deepgram may keep dictation to improve its models. Untick *Let Deepgram keep my
+  dictation* to opt out; that costs more and needs a paid account.
+- The key stays in the browser and is never written to a project. What was heard and what you
+  sent are logged with the project; the audio is not.
 
 ## Command line
 
@@ -213,5 +224,6 @@ that library with pacman.
 | The page opens, but a red banner says *The audio core did not load*; the terminal shows `Failed to resolve import "../core-wasm/nlae.js"` | The core hasn't been built: `pnpm run wasm`, then reload the page |
 | `Error: Port 5173 is already in use` | A dev server is already running, in another terminal or as VS Code's *Dev server* task |
 | A change to the Rust code doesn't show up | `pnpm run wasm` again; the page reloads when it finishes |
-| Saving or recording doesn't work when the page is opened from another computer | Browsers only allow storage and the microphone on `localhost` or HTTPS. Forward the port (`ssh -L 5173:localhost:5173 <host>`, or VS Code's port forwarding) and open <http://localhost:5173> |
+| *Speak* says the connection was refused | Check the Deepgram key in *Settings → Speech*. If *Let Deepgram keep my dictation* is unticked, the account must be a paid one |
+| Saving, recording or *Speak* doesn't work when the page is opened from another computer | Browsers only allow storage and the microphone on `localhost` or HTTPS. Forward the port (`ssh -L 5173:localhost:5173 <host>`, or VS Code's port forwarding) and open <http://localhost:5173> |
 | End-to-end tests: `Executable doesn't exist at …` | `pnpm exec playwright install chromium` |

@@ -17,7 +17,7 @@
         "step.removed", "step.annotated", "stack.rated",
         "recipe.saved", "recipe.replayed", "render.exported", "dataset.exported",
         "project.clone_made", "project.cloned_from", "bundle.exported",
-        "assistant.exchange"
+        "assistant.exchange", "speech.transcribed"
       ]
     },
     "actor": { "$ref": "step.schema.json#/$defs/actor" },
@@ -41,7 +41,9 @@
         "properties": {
           "kind": { "enum": ["step", "plan"] },
           "steps": { "type": "array", "minItems": 1, "items": { "$ref": "step.schema.json" } },
-          "window": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+          "window": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "exchange": { "$ref": "step.schema.json#/$defs/hash" },
+          "dictation": { "$ref": "step.schema.json#/$defs/hash" }
         } } } } },
     { "if": { "properties": { "type": { "const": "step.accepted" } } },
       "then": { "properties": { "data": {
@@ -61,6 +63,24 @@
     { "if": { "properties": { "type": { "const": "project.cloned_from" } } },
       "then": { "properties": { "data": { "required": ["parent_project", "parent_head", "inherited_steps", "source"] } } } },
     { "if": { "properties": { "type": { "const": "project.clone_made" } } },
-      "then": { "properties": { "data": { "required": ["child_project", "steps_inherited"] } } } }
+      "then": { "properties": { "data": { "required": ["child_project", "steps_inherited"] } } } },
+    { "if": { "properties": { "type": { "const": "speech.transcribed" } } },
+      "then": { "properties": { "data": {
+        "required": ["provider", "model", "host", "params", "request_ids", "heard", "segments", "words", "edited", "audio_s", "latency_ms"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 },
+          "host": { "type": "string", "pattern": "^[^/?#@\\s]+$" },
+          "params": { "type": "array", "items": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "string" }], "minItems": 2, "maxItems": 2 } },
+          "request_ids": { "type": "array", "items": { "type": "string" } },
+          "heard": { "type": "string", "minLength": 1 },
+          "segments": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["text", "confidence"],
+            "properties": { "text": { "type": "string" }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 } } } },
+          "words": { "type": "string", "minLength": 1 },
+          "edited": { "type": "boolean" },
+          "audio_s": { "type": "number", "minimum": 0 },
+          "latency_ms": { "type": "integer", "minimum": 0 }
+        } } } } }
   ]
 }

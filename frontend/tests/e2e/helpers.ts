@@ -128,3 +128,25 @@ export async function logged(page: Page, type: string, count = 1): Promise<Event
   await expect.poll(async () => (await storedEvents(page)).filter((e) => e.type === type).length).toBe(count);
   return (await storedEvents(page)).filter((e) => e.type === type);
 }
+
+/** Where the app keeps `text`: library files and browser storage (and how many library files there are). */
+export async function whereStored(page: Page, text: string): Promise<{ found: string[]; files: number }> {
+  return page.evaluate(async (text) => {
+    const found: string[] = [];
+    let files = 0;
+    const walk = async (d: FileSystemDirectoryHandle, path: string) => {
+      // @ts-expect-error: entries() is available on directory handles in Chromium.
+      for await (const [name, h] of d.entries()) {
+        if (h.kind === "directory") await walk(h, `${path}${name}/`);
+        else {
+          files++;
+          if ((await (await h.getFile()).text()).includes(text)) found.push(`${path}${name}`);
+        }
+      }
+    };
+    await walk(await navigator.storage.getDirectory(), "");
+    for (const s of [localStorage, sessionStorage])
+      for (let i = 0; i < s.length; i++) if ((s.getItem(s.key(i)!) ?? "").includes(text)) found.push(`storage:${s.key(i)}`);
+    return { found, files };
+  }, text);
+}

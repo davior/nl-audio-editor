@@ -26,6 +26,9 @@ pub struct PreviewRecord {
     /// The `assistant.exchange` event (its hash) the previewed steps came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange: Option<String>,
+    /// The `speech.transcribed` event (its hash), when the request was spoken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictation: Option<String>,
     #[serde(default)]
     pub seq: u64,
     #[serde(default)]

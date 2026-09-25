@@ -26,10 +26,26 @@
       "properties": {
         "scope": { "$ref": "../step.schema.json#/$defs/scope" },
         "actor": { "$ref": "../step.schema.json#/$defs/actor" },
-        "bindings": { "type": "object", "additionalProperties": { "$ref": "../step.schema.json#/$defs/binding" } }
+        "bindings": { "type": "object", "additionalProperties": { "$ref": "../step.schema.json#/$defs/binding" } },
+        "spoken": { "$ref": "#/$defs/spoken" }
       } },
     "outcome": { "type": "object", "required": ["measurements"] },
     "rating": { "type": ["object", "null"] },
     "hashes": { "type": "object", "required": ["source", "input"] }
+  },
+  "$defs": {
+    "spoken": {
+      "description": "The request was spoken: what the recogniser heard, and whether the user changed it before sending (the words sent are the step's intent).",
+      "type": "object",
+      "required": ["dictation", "heard", "edited", "provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "dictation": { "$ref": "../step.schema.json#/$defs/hash" },
+        "heard": { "type": "string", "minLength": 1 },
+        "edited": { "type": "boolean" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    }
   }
 }

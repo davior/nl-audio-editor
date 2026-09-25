@@ -2,9 +2,10 @@
 // The core runs here, off the main thread: decoding, analysis, rendering and
 // every change to a project. The page only draws and plays what comes back.
 import * as Comlink from "comlink";
-import init, { WasmProject, parity, descriptors, route, parse_response, correction_request } from "../core-wasm/nlae.js";
+import init, { WasmProject, parity, descriptors, route, parse_response, correction_request, listen_params } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
 import type {
+  Dictation,
   EditMap,
   Exchange,
   Pcm,
@@ -137,14 +138,23 @@ const api = {
     await ready;
     return correction_request(request, response, problems);
   },
-  async previewRouted(id: string, steps: RoutedStep[], words: string): Promise<PreviewResult> {
+  /** The query for streaming dictation, as `[name, value]` pairs; the key is not part of it. */
+  async listenParams(model: string, language: string, sampleRate: number, optOut: boolean): Promise<[string, string][]> {
+    await ready;
+    return listen_params(model, language, sampleRate, optOut);
+  },
+  /** Log a spoken request before acting on it; returns the event's hash, for the preview to refer to. */
+  async recordDictation(id: string, dictation: Dictation): Promise<string> {
+    return get(id).record_dictation(dictation);
+  },
+  async previewRouted(id: string, steps: RoutedStep[], words: string, dictation?: string): Promise<PreviewResult> {
     const p = get(id);
-    const r = p.preview_routed(steps, words) as { record: PreviewRecord; window: [number, number] };
+    const r = p.preview_routed(steps, words, dictation) as { record: PreviewRecord; window: [number, number] };
     return { ...r, summary: summary(p) };
   },
-  async previewRecipe(id: string, name: string, words: string): Promise<PreviewResult> {
+  async previewRecipe(id: string, name: string, words: string, dictation?: string): Promise<PreviewResult> {
     const p = get(id);
-    const r = p.preview_recipe(name, words) as { record: PreviewRecord; window: [number, number] };
+    const r = p.preview_recipe(name, words, dictation) as { record: PreviewRecord; window: [number, number] };
     return { ...r, summary: summary(p) };
   },
   async assistantRequest(id: string, model: string, history: Turn[], words: string, selection: Selection | null): Promise<string> {
@@ -160,9 +170,13 @@ const api = {
     model: string,
     provider: string,
     exchange: string,
+    dictation?: string,
   ): Promise<PreviewResult> {
     const p = get(id);
-    const r = p.preview_proposal(proposal, words, model, provider, exchange) as { record: PreviewRecord; window: [number, number] };
+    const r = p.preview_proposal(proposal, words, model, provider, exchange, dictation) as {
+      record: PreviewRecord;
+      window: [number, number];
+    };
     return { ...r, summary: summary(p) };
   },
   async accept(

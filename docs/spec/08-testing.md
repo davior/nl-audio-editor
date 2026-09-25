@@ -186,6 +186,44 @@ In Rust:
 - **Parity:** the chain now removes and inserts time before the final limiter. The re-pinned
   hashes match natively and in WebAssembly.
 
+### Spoken commands
+
+A stand-in recogniser is started with the test run (`tests/e2e/mock-deepgram.ts`):
+- It accepts a stream only with the key in the `token` subprotocol, as a browser has to send it.
+- It keeps what it received: the query, the protocol header, how much audio came and whether it
+  was whole 16-bit samples, and the control messages.
+- It "hears" what each test scripts for its own key, paced by the audio as it arrives: interim
+  words, a final result, then `UtteranceEnd`. `CloseStream` finalises the rest, sends
+  `Metadata` and closes, as Deepgram does. It can also hold the opening handshake, as a slow
+  network would.
+
+The microphone is Chromium's fake device. All pass (2026-09-25, with the scenarios above, 23
+tests in about 50 s):
+
+| # | Scenario | Checks |
+|---|---|---|
+| 1 | Dictate, correct, send | Playback pauses when the microphone opens, and *Play* waits. Interim words appear and are replaced as they firm up; the pause ends listening, and nothing is sent. The user changes "10 dB" to "12 dB" and presses Enter: a local `band_cut` by 12 dB. `speech.transcribed` is logged before the preview, with what was heard, the words sent, `edited`, the request id and **the query exactly as the stand-in received it**; the preview refers to it. The stand-in got whole 16-bit samples, not silence, at the stated rate, and `CloseStream`; the key came only in the subprotocol. The key is in no library file, browser storage or saved bundle |
+| 2 | A dictated "undo" | It waits in the box and the stack is unchanged; Enter removes the step, after the dictation is logged |
+| 3 | Escape and Enter while listening | Escape restores what was typed before, and nothing is logged. Enter stops listening and leaves the words to check; a second Enter sends them ("play the residual" switches the monitor). Only the sent dictation is logged |
+| 4 | Opting out | Unticking *Let Deepgram keep my dictation* sends `mip_opt_out=true`; the choice is remembered on this device, the key is not |
+| 5 | Settings and a refused key | Without a key, *Speak* opens the settings. *Test connection* opens a stream and closes it without audio, and reports the host and request id. A wrong key is refused, in the settings and from *Speak*; the microphone closes and *Play* works again |
+| 6 | Escape while the stream opens | The stand-in holds the handshake for 1.5 s. Escape during it restores the box and closes the microphone; well after the stream would have opened, it is still closed and **no audio reached the recogniser** (before the fix, the audio captured while opening was sent: 1.4 s of it) |
+
+**In Rust:**
+- the stream's query: raw 16-bit audio at the capture rate, interim results, key terms (only
+  for Nova-3), the opt-out only when asked; odd settings refused;
+- a dictation whose parameters could hold a key, whose host has a path or credentials, or
+  that heard nothing, is refused before anything is logged;
+- `speech.transcribed` matches its schema; a preview's link to it, from routed steps and from a
+  recipe replay, survives reopening, and a link to any other event is refused;
+- the dataset's step and chat records carry `spoken` and match their schemas;
+- the router reads spoken forms: "Normalise to minus 1 dB.", "Cut 3.1 to 3.2 kilohertz by
+  12 dB.", "Insert 1 point 5 seconds of silence at 30 seconds.", "Undo.".
+
+**Unit tests (Vitest):** interim and final results, pauses and request ids are taken in order;
+the box is composed from what was typed and what was heard; the stream's address never carries
+the key.
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the

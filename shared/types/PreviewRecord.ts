@@ -9,4 +9,8 @@ kind: string, plan_id?: string | null, steps: Array<Step>, window: [number, numb
 /**
  * The `assistant.exchange` event (its hash) the previewed steps came from.
  */
-exchange?: string | null, seq: bigint, event_hash: string, };
+exchange?: string | null, 
+/**
+ * The `speech.transcribed` event (its hash), when the request was spoken.
+ */
+dictation?: string | null, seq: bigint, event_hash: string, };

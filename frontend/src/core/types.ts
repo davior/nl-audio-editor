@@ -13,6 +13,8 @@ export type { Selection } from "../../../shared/types/Selection";
 export type { Turn } from "../../../shared/types/Turn";
 export type { Proposal } from "../../../shared/types/Proposal";
 export type { Exchange } from "../../../shared/types/Exchange";
+export type { Dictation } from "../../../shared/types/Dictation";
+export type { Segment } from "../../../shared/types/Segment";
 
 /** A just-created or cloned project has no open report yet; only a list of problems. */
 export type Report = OpenReport | { problems: string[]; created?: boolean; cloned?: boolean };

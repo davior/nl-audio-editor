@@ -79,6 +79,9 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const [events, setEvents] = useState<Record<string, unknown>[]>([]);
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
+  // While the console's microphone is open, nothing plays, so no recording reaches the recogniser.
+  const [dictating, setDictating] = useState(false);
+  const dictatingRef = useRef(false);
   const [loop, setLoop] = useState(false);
   const [width, setWidth] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -237,7 +240,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           edited ? new TimeMap(editMap.pieces) : null,
         );
         debug("monitorLoaded", view.monitor);
-        if (was !== null) void p.play(was).then(() => setPlaying(true));
+        if (was !== null && !dictatingRef.current) void p.play(was).then(() => setPlaying(true));
         else setPlaying(false);
       })
       .catch(onError);
@@ -271,13 +274,27 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   }, [playing, duration]);
 
   useEffect(() => debug("playhead", playhead), [playhead]);
+  useEffect(() => debug("dictating", dictating), [dictating]);
 
   const selectionSpan = view.selection ?? (view.tfSelection ? { t0: view.tfSelection.t0, t1: view.tfSelection.t1 } : null);
 
   const play = useCallback(async (from: number, to?: number, looping = false) => {
+    if (dictatingRef.current) return;
     playFrom.current = from;
     await player.current.play(from, to, looping);
     setPlaying(true);
+  }, []);
+
+  const onDictating = useCallback((on: boolean) => {
+    dictatingRef.current = on;
+    setDictating(on);
+    const p = player.current;
+    if (on && p.playing) {
+      const t = p.position();
+      p.stop();
+      setPlaying(false);
+      setPlayhead(t);
+    }
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -600,7 +617,12 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
 
       <div className="toolbar">
         <div className="group">
-          <button onClick={togglePlay} data-testid="play" title="Play / pause (space)">
+          <button
+            onClick={togglePlay}
+            disabled={dictating}
+            data-testid="play"
+            title={dictating ? "Playback waits while the microphone is on" : "Play / pause (space)"}
+          >
             {playing ? "❚❚ Pause" : "▶ Play"}
           </button>
           <button onClick={stop} data-testid="stop" title="Stop and return to where playback started">
@@ -608,7 +630,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           </button>
           <button
             onClick={() => selectionSpan && play(selectionSpan.t0, selectionSpan.t1, loop)}
-            disabled={!selectionSpan}
+            disabled={!selectionSpan || dictating}
             data-testid="play-selection"
           >
             ▶ Selection
@@ -806,6 +828,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
         onError={onError}
         save={save}
         request={consoleRequest}
+        onDictating={onDictating}
       />
 
       <div className="panels">

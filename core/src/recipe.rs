@@ -217,14 +217,16 @@ pub struct ReplayPlan {
 }
 
 /// Replay a recipe as one plan, as an interface does: record the dry-run diff
-/// (`recipe.replayed`), then preview the plan. `intent` is the user's words.
+/// (`recipe.replayed`), then preview the plan. `intent` is the user's words;
+/// `opts` gives the window and what the request came from (its plan and
+/// recipe fields are set here).
 pub fn preview_replay<S: Store>(
     project: &mut Project<S>,
     env: &mut dyn crate::provenance::Env,
     recipe: &Recipe,
     mode: ReplayMode,
     actor: Actor,
-    window: Option<(f64, f64)>,
+    opts: crate::project::PreviewOptions,
     intent: Option<&str>,
 ) -> Result<(ReplayPlan, crate::project::Preview), ProjectError> {
     let mut plan = plan_replay(project, recipe, mode, false, actor)?;
@@ -240,10 +242,9 @@ pub fn preview_replay<S: Store>(
         json!({ "recipe": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode, "dry_run": false, "diff": plan.diff }),
     )?;
     let opts = crate::project::PreviewOptions {
-        window,
         plan: true,
         recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
-        exchange: None,
+        ..opts
     };
     let pv = project.preview(env, plan.drafts.clone(), opts)?;
     Ok((plan, pv))

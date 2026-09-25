@@ -13,6 +13,9 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Targets, in order: speech under noise, faint/background voices, signals & authenticity** — as prioritised by the product owner; music production is out of scope.
 - **The Audacity spoken-word clean-up is the reference workflow** — it is the process used today; see `docs/spec/reference-workflows/`.
 - **Parent spec written together, in `docs/spec/`** — the product owner asked to co-write it; `OPEN:` markers hold their decisions.
+- [16] **Spoken commands are streamed to Deepgram** — chosen by the product owner, 2026-09-25, in place of a local engine (Whisper): the user's dictated voice goes to Deepgram while the microphone is on; a project's audio never does.
+- **Deepgram may keep dictation to improve its models unless the user opts out** — chosen by the product owner, 2026-09-25: Deepgram's default and lower price; the setting sends `mip_opt_out=true`, which costs more and needs a paid account.
+- **Dictated words fill the console box, and the user sends them with Enter** — chosen by the product owner, 2026-09-25: a misheard "undo" cannot act on its own, and a correction is recorded next to what was heard.
 
 ## Platform and architecture
 
@@ -47,6 +50,12 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Exports log the file's SHA-256, from the browser and the command line alike** — an exported file can be matched to its record byte for byte, and the two front ends are shown to produce the same file.
 - **The console tests use a stand-in OpenAI-compatible provider started with the test run** — the model path, CORS included, is tested without a network or a key.
 - **`nlae relay` only if browsers are refused** — CORS for api.deepseek.com could not be checked from the build environment; *Test connection* settles it, and the relay is built only if needed.
+- **Dictation streams over Deepgram's WebSocket, with the key as the subprotocol** — its REST API refuses web pages (CORS), and a browser cannot set headers on a WebSocket; the key stays out of the address, the core and the log.
+- **The core sets the stream's query and logs the transcript; the front end holds the key and streams** — the same split as the model's, so what is asked for and what is recorded are the same in every front end.
+- **Raw 16-bit audio at the capture rate, about 100 ms at a time** — no container to wait for, and the format is stated in the query that is logged.
+- **Echo cancellation, noise suppression and gain control on for dictation, off for recordings** — dictation is not evidence and they help recognition; echo cancellation also keeps speaker playback out.
+- **Playback pauses while the microphone is open** — so a recording playing through the speakers is never streamed.
+- **Spoken forms are routed like typed ones** ("minus 1 dB", "1 point 5 seconds", "kilohertz") — a recogniser writes some numbers and units in words, and routine requests should not cost a model call. "Kilohertz" had lost its unit in typed requests too.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations
@@ -85,6 +94,8 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - [7] **Recipes are portable, versioned JSON files, also kept in a local library** — needed for reuse across clips and machines.
 - [2] **A bundle embeds the source; clones in the local library share one stored copy** — self-contained sharing without duplicating audio locally.
 - [3] **MP3 decoding yes; MP3 export deferred** — decoding is needed for the material; export licensing can wait, WAV is the evidential format.
-- [16] **Speech-to-text deferred; the M1 console is typed; prefer a local engine** — Chrome's Web Speech API sends voice to a cloud service.
+- [16] **Speech-to-text deferred; the M1 console is typed; prefer a local engine** — Chrome's Web Speech API sends voice to a cloud service. *Superseded 2026-09-25: Deepgram, chosen by the product owner (see Product).*
 - [17] **Single-clip product** — multitrack is out of scope for the first build.
 - [20] **Provisional performance targets** — 10-minute file shows both lanes < 3 s; playback < 100 ms; 10 s compressor preview < 1 s in WebAssembly.
+- **Dictation audio is never stored; what was heard and what was sent are logged (`speech.transcribed`) when the words are sent** — the words are the request; the voice is the user's, not evidence, and stays out of bundles. The preview refers to the event, and dataset records carry what was heard, so corrections become training data.
+- **Dictation that is never sent is not logged** — nothing from it reached the project.

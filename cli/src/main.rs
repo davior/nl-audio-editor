@@ -348,7 +348,7 @@ fn ask(a: &AskArgs) -> Res<()> {
                 &recipe,
                 ReplayMode::Adaptive,
                 Actor::user(),
-                window,
+                preview_opts(None),
                 Some(&a.words),
             )
             .map_err(|e| e.to_string())?;
@@ -695,7 +695,7 @@ fn run_plan<S: Store>(p: &mut Project<S>, recipe: &Recipe, common: &PlanCommon) 
         window: parse_window(&common.window)?,
         plan: true,
         recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
-        exchange: None,
+        ..Default::default()
     };
     let pv = p
         .preview(&mut e, plan.drafts.clone(), opts)

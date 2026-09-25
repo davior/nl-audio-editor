@@ -12,7 +12,7 @@ use nlae_core::analysis::spectrogram::{
     spectrogram as draw, spectrogram_columns, SpectrogramRequest,
 };
 use nlae_core::analysis::{features, peaks::peaks};
-use nlae_core::assistant::{self, Exchange, Proposal, RoutedStep, Selection, Turn};
+use nlae_core::assistant::{self, Dictation, Exchange, Proposal, RoutedStep, Selection, Turn};
 use nlae_core::audio::decode;
 use nlae_core::audio::wav::{write_wav_with_cues, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
@@ -200,6 +200,18 @@ pub fn correction_request(
     Ok(assistant::build_correction(&req, &resp, &problems)
         .map_err(js_err)?
         .to_string())
+}
+
+/// The query for streaming dictation to the recogniser: `[name, value]` pairs,
+/// in order. The key is not part of it.
+#[wasm_bindgen]
+pub fn listen_params(
+    model: &str,
+    language: &str,
+    sample_rate: u32,
+    opt_out: bool,
+) -> Result<JsValue, JsValue> {
+    to_js(&assistant::listen_params(model, language, sample_rate, opt_out).map_err(js_err)?)
 }
 
 /// Native/WebAssembly parity: resolved-chain hash and render hash, plus the pinned values.
@@ -474,31 +486,50 @@ impl WasmProject {
         ))
     }
 
-    /// Preview steps the router made from the user's words.
-    pub fn preview_routed(&mut self, steps: JsValue, words: &str) -> Result<JsValue, JsValue> {
+    /// Preview steps the router made from the user's words. `dictation` is the
+    /// `speech.transcribed` event the words came from, when they were spoken.
+    pub fn preview_routed(
+        &mut self,
+        steps: JsValue,
+        words: &str,
+        dictation: Option<String>,
+    ) -> Result<JsValue, JsValue> {
         let steps: Vec<RoutedStep> = serde_wasm_bindgen::from_value(steps).map_err(js_err)?;
         let drafts = steps
             .iter()
             .map(|s| s.draft(Origin::Console, words))
             .collect();
+        let opts = PreviewOptions {
+            dictation,
+            ..Default::default()
+        };
         let pv = self
             .project
-            .preview(&mut WebEnv, drafts, PreviewOptions::default())
+            .preview(&mut WebEnv, drafts, opts)
             .map_err(js_err)?;
         self.keep_preview(pv)
     }
 
     /// Replay a built-in recipe on this recording as one plan, and preview it.
-    pub fn preview_recipe(&mut self, name: &str, words: &str) -> Result<JsValue, JsValue> {
+    pub fn preview_recipe(
+        &mut self,
+        name: &str,
+        words: &str,
+        dictation: Option<String>,
+    ) -> Result<JsValue, JsValue> {
         let recipe =
             Recipe::builtin(name).ok_or_else(|| js_err(format!("no built-in recipe `{name}`")))?;
+        let opts = PreviewOptions {
+            dictation,
+            ..Default::default()
+        };
         let (_, pv) = nlae_core::recipe::preview_replay(
             &mut self.project,
             &mut WebEnv,
             &recipe,
             ReplayMode::Adaptive,
             Actor::user(),
-            None,
+            opts,
             Some(words),
         )
         .map_err(js_err)?;
@@ -528,7 +559,14 @@ impl WasmProject {
         assistant::record_exchange(&mut self.project, &mut WebEnv, &ex).map_err(js_err)
     }
 
-    /// Preview what the model proposed, linked to the exchange it came from.
+    /// Log a spoken request before it is acted on; returns its event hash.
+    pub fn record_dictation(&mut self, dictation: JsValue) -> Result<String, JsValue> {
+        let d: Dictation = serde_wasm_bindgen::from_value(dictation).map_err(js_err)?;
+        assistant::record_dictation(&mut self.project, &mut WebEnv, &d).map_err(js_err)
+    }
+
+    /// Preview what the model proposed, linked to the exchange it came from
+    /// (and to the spoken request, if it was spoken).
     pub fn preview_proposal(
         &mut self,
         proposal: JsValue,
@@ -536,12 +574,14 @@ impl WasmProject {
         model: &str,
         provider: &str,
         exchange: &str,
+        dictation: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let p: Proposal = serde_wasm_bindgen::from_value(proposal).map_err(js_err)?;
         let drafts = p.drafts(&Actor::assistant(model, provider), Origin::Console, words);
         let opts = PreviewOptions {
             plan: p.plan,
             exchange: Some(exchange.to_string()),
+            dictation,
             ..Default::default()
         };
         let pv = self

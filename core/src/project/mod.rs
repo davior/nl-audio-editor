@@ -155,6 +155,8 @@ pub struct PreviewOptions {
     pub recipe: Option<Value>,
     /// The `assistant.exchange` event (its hash) the steps came from, if any.
     pub exchange: Option<String>,
+    /// The `speech.transcribed` event (its hash), when the request was spoken.
+    pub dictation: Option<String>,
 }
 
 /// A preview: the record logged, and the audio for listening.
@@ -944,6 +946,16 @@ impl<S: Store> Project<S> {
         if drafts.is_empty() {
             return invalid("nothing to preview");
         }
+        if let Some(h) = &opts.dictation {
+            let logged = self
+                .log
+                .events()
+                .iter()
+                .any(|e| e["type"] == "speech.transcribed" && e["hash"] == h.as_str());
+            if !logged {
+                return invalid(format!("no spoken request {h} in this project's log"));
+            }
+        }
         let base = self.render_steps();
         let base_hash = self.state.stack_hash.clone();
         let is_plan = opts.plan || drafts.len() > 1;
@@ -1038,6 +1050,7 @@ impl<S: Store> Project<S> {
             base_stack_hash: base_hash,
             recipe: opts.recipe.clone(),
             exchange: opts.exchange.clone(),
+            dictation: opts.dictation.clone(),
             seq: 0,
             event_hash: String::new(),
         };
