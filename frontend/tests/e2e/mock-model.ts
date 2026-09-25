@@ -60,6 +60,13 @@ function answer(messages: Message[]): { words: string; correction: boolean; resp
     response = reply("Pushing down the knocks where you selected them.", [
       call("spectral_compressor", { params: { mode: "transient" }, scope }),
     ]);
+  } else if (words.includes("brighter")) {
+    // Tilt is only in the index at first: the model asks to see it, then uses it.
+    response = correction
+      ? reply("Tilting the spectrum up by 1.5 dB per octave around 1 kHz.", [
+          call("tilt", { params: { db_per_octave: 1.5 }, scope: { kind: "clip" } }, "call_2"),
+        ])
+      : reply(null, [call("describe_operations", { ids: ["tilt"] })]);
   } else if (words.includes("much louder")) {
     // First an impossible value; asked to correct itself, a valid one.
     response = correction

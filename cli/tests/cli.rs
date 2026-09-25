@@ -188,6 +188,64 @@ fn ask_in_plain_words_locally_and_through_a_model() {
     );
     assert!(err.contains("gain_db"), "{err}");
 
+    // An operation the model sees only in the index: it asks to see it, then calls it.
+    let see = serde_json::json!({ "choices": [{ "message": { "role": "assistant", "content": null,
+        "tool_calls": [{ "id": "call_3", "type": "function", "function": {
+            "name": "describe_operations", "arguments": "{\"ids\":[\"tilt\"]}" } }] } }] });
+    let tilt = serde_json::json!({ "choices": [{ "message": { "role": "assistant",
+        "content": "Tilting the spectrum up by 1.5 dB per octave.",
+        "tool_calls": [{ "id": "call_4", "type": "function", "function": {
+            "name": "tilt", "arguments": "{\"params\":{\"db_per_octave\":1.5},\"scope\":{\"kind\":\"clip\"}}" } }] } }] });
+    std::fs::write(dir.join("see.json"), see.to_string()).unwrap();
+    std::fs::write(dir.join("tilt.json"), tilt.to_string()).unwrap();
+    let err = nlae_fails(
+        &[
+            "ask",
+            "case",
+            "make it brighter",
+            "--response-file",
+            "see.json",
+        ],
+        &dir,
+    );
+    assert!(err.contains("asked to see tilt"), "{err}");
+    let out = nlae(
+        &[
+            "ask",
+            "case",
+            "make it brighter",
+            "--response-file",
+            "see.json",
+            "--response-file",
+            "tilt.json",
+        ],
+        &dir,
+    );
+    assert!(out.contains("asked to see tilt"), "{out}");
+    assert!(out.contains("Tilting the spectrum"), "{out}");
+    let log: Vec<serde_json::Value> = nlae(&["log", "case", "--json"], &dir)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let exchanges: Vec<&serde_json::Value> = log
+        .iter()
+        .filter(|e| e["type"] == "assistant.exchange")
+        .collect();
+    let (asked, answered) = (
+        exchanges[exchanges.len() - 2],
+        exchanges[exchanges.len() - 1],
+    );
+    assert_eq!(answered["data"]["describes"], asked["hash"]);
+    let offered = |e: &serde_json::Value| {
+        e["data"]["request"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["function"]["name"] == "tilt")
+    };
+    assert!(!offered(asked) && offered(answered));
+    nlae(&["reject", "case", &preview_id(&out)], &dir);
+
     // Undo in words; and the dataset carries the exchange as it happened.
     assert!(nlae(&["ask", "case", "undo"], &dir).contains("stays in the log"));
     nlae(&["dataset", "case", "-o", "ds"], &dir);

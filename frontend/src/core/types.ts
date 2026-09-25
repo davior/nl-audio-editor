@@ -14,6 +14,14 @@ export type { Turn } from "../../../shared/types/Turn";
 export type { Proposal } from "../../../shared/types/Proposal";
 export type { Exchange } from "../../../shared/types/Exchange";
 export type { Dictation } from "../../../shared/types/Dictation";
+export type { Rounds } from "../../../shared/types/Rounds";
+
+/** What a model's answer calls for next (the core decides; see `next_round`). */
+export type NextRound =
+  | { next: "done"; proposal: import("../../../shared/types/Proposal").Proposal }
+  | { next: "describe"; request: string; ids: string[] }
+  | { next: "correct"; request: string; problems: string[] }
+  | { next: "failed"; problems: string[] };
 export type { Segment } from "../../../shared/types/Segment";
 
 /** A just-created or cloned project has no open report yet; only a list of problems. */

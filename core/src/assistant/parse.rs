@@ -33,6 +33,11 @@ pub struct Proposal {
     pub text: Option<String>,
     /// Several operations to be accepted together.
     pub plan: bool,
+    /// Operations the model asked to see (`describe_operations`) before
+    /// choosing. When there are any, nothing else in the answer is acted on:
+    /// the operations are described and the model asked again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub describe: Vec<String>,
 }
 
 impl Proposal {
@@ -107,6 +112,8 @@ pub fn parse_response(response: &Value) -> Result<Proposal, Vec<String>> {
     let mut steps = Vec::new();
     let mut problems = Vec::new();
     let mut plan = calls.len() > 1;
+    let mut describe: Vec<String> = Vec::new();
+    let mut describe_problems = Vec::new();
     for c in &calls {
         let name = c["function"]["name"].as_str().unwrap_or_default();
         let raw = &c["function"]["arguments"];
@@ -120,7 +127,23 @@ pub fn parse_response(response: &Value) -> Result<Proposal, Vec<String>> {
             },
             other => other.clone(),
         };
-        if name == "plan" {
+        if name == super::prompt::DESCRIBE_TOOL {
+            let ids = args["ids"].as_array().cloned().unwrap_or_default();
+            if ids.is_empty() {
+                describe_problems.push(format!("{name}: no operation ids"));
+            }
+            for id in ids {
+                let id = id.as_str().unwrap_or_default().to_string();
+                match registry().latest(&id) {
+                    Ok(op) if !op.descriptor().system => {
+                        if !describe.contains(&id) {
+                            describe.push(id)
+                        }
+                    }
+                    _ => describe_problems.push(format!("{name}: `{id}` is not an operation")),
+                }
+            }
+        } else if name == "plan" {
             plan = true;
             let list = args["steps"].as_array().cloned().unwrap_or_default();
             if list.is_empty() {
@@ -143,13 +166,30 @@ pub fn parse_response(response: &Value) -> Result<Proposal, Vec<String>> {
             }
         }
     }
+    // Asking to see operations comes first: anything else is answered again after.
+    if !describe_problems.is_empty() {
+        return Err(describe_problems);
+    }
+    if !describe.is_empty() {
+        return Ok(Proposal {
+            steps: Vec::new(),
+            text,
+            plan: false,
+            describe,
+        });
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
     if steps.is_empty() && text.is_none() {
         return Err(vec!["the response proposes nothing and says nothing".into()]);
     }
-    Ok(Proposal { steps, text, plan })
+    Ok(Proposal {
+        steps,
+        text,
+        plan,
+        describe,
+    })
 }
 
 #[cfg(test)]

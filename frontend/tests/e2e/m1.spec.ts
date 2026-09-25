@@ -4,7 +4,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { drag, fx, importClip, lanesDrawn, logged, nlae, say, start, whereStored } from "./helpers";
+import { drag, fx, importClip, lanesDrawn, logged, nlae, say, start, whereStored, type Event } from "./helpers";
 import { MOCK_URL, seenByMock } from "./mock-model";
 
 const KEY = "sk-nlae-e2e-7c1f9a2b40d6";
@@ -95,7 +95,7 @@ test("2. “the hum is distracting” goes to the model; a value is changed befo
   // The exchange holds exactly what the provider was sent, and the preview points to it.
   const [ex] = await logged(page, "assistant.exchange");
   expect(ex.actor).toMatchObject({ kind: "assistant", model: "mock-1", provider: "mock" });
-  expect(ex.data).toMatchObject({ provider: "mock", model: "mock-1", host: "127.0.0.1:4180", prompt_version: 1 });
+  expect(ex.data).toMatchObject({ provider: "mock", model: "mock-1", host: "127.0.0.1:4180", prompt_version: 2 });
   const sent = (await seenByMock()).filter((s) => s.words === "the hum is distracting");
   expect(sent.length).toBeGreaterThan(0);
   expect(sent.map((s) => JSON.parse(s.body))).toContainEqual(ex.data.request);
@@ -244,4 +244,30 @@ test("7. undo removes the top step, from the stack panel or in words, and a rati
     await expect.poll(async () => (await nlae(page)).project.stackHash).toBe(empty);
   }
   await logged(page, "step.removed", 2);
+});
+
+test("8. an operation the model sees only in the index is described when it asks, then used", async ({ page }) => {
+  await start(page);
+  await importClip(page);
+  await useMockModel(page);
+  const turn = await say(page, "make it brighter");
+  await expect(turn).toHaveAttribute("data-status", "proposal");
+  await expect(turn).toHaveAttribute("data-via", "model");
+  await expect(turn.getByTestId("proposal-step")).toHaveAttribute("data-op", "tilt");
+
+  // Two exchanges: the first offers tilt only in the index; the second describes it and offers it.
+  const exchanges = await logged(page, "assistant.exchange", 2);
+  const tools = (e: Event) => (e.data.request as { tools: { function: { name: string } }[] }).tools.map((t) => t.function.name);
+  expect(tools(exchanges[0])).toContain("describe_operations");
+  expect(tools(exchanges[0])).not.toContain("tilt");
+  expect(tools(exchanges[1])).toContain("tilt");
+  expect(exchanges[1].data.describes).toBe(exchanges[0].hash);
+  expect(exchanges.map((e) => e.data.prompt_version)).toEqual([2, 2]);
+  const [preview] = await logged(page, "step.previewed");
+  expect(preview.data.exchange).toBe(exchanges[1].hash);
+
+  await turn.getByTestId("accept").click();
+  await expect(turn.getByTestId("turn-outcome")).toHaveText("accepted");
+  const [accepted] = await logged(page, "step.accepted");
+  expect(accepted.data.step).toMatchObject({ op: "tilt", intent: "make it brighter", actor: { model: "mock-1", provider: "mock" } });
 });

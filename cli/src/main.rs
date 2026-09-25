@@ -230,9 +230,10 @@ struct AskArgs {
     /// The model (default: deepseek-chat on DeepSeek, qwen2.5 on Ollama).
     #[arg(long)]
     model: Option<String>,
-    /// Use this saved model response (JSON) instead of calling the provider.
+    /// Use saved model responses (JSON) instead of calling the provider, one
+    /// per round, in order (repeat the option for a describe or correction round).
     #[arg(long)]
-    response_file: Option<PathBuf>,
+    response_file: Vec<PathBuf>,
     /// What "here" refers to: time:T0,T1 or tf:T0,T1,FLO,FHI.
     #[arg(long)]
     selection: Option<String>,
@@ -382,70 +383,91 @@ fn ask(a: &AskArgs) -> Res<()> {
             Ok(())
         }
         Route::Model => {
+            use assistant::NextRound;
             let prov = provider(a)?;
-            let request = assistant::request_for(&mut p, &prov.model, &[], &a.words, selection)
+            let mut request = assistant::request_for(&mut p, &prov.model, &[], &a.words, selection)
                 .map_err(|e| e.to_string())?;
-            let body = request.to_string();
-            let (response, latency_ms, host) = match &a.response_file {
-                Some(f) => {
-                    let text =
-                        std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
-                    let v =
-                        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
-                    (v, 0, format!("{} (saved response)", host_of(&prov.base)))
-                }
-                None => {
-                    if prov.name == "deepseek" && prov.key.is_none() {
-                        return Err("set DEEPSEEK_API_KEY (or NLAE_API_KEY) to ask DeepSeek".into());
+            let saving = !a.response_file.is_empty();
+            let mut saved = a.response_file.iter().peekable();
+            let mut rounds = assistant::Rounds::default();
+            let (mut corrects, mut describes) = (None, None);
+            let (parsed, hash) = loop {
+                let body = request.to_string();
+                let (response, latency_ms, host) = match saved.next() {
+                    Some(f) => {
+                        let text = std::fs::read_to_string(f)
+                            .map_err(|e| format!("{}: {e}", f.display()))?;
+                        let v = serde_json::from_str(&text)
+                            .map_err(|e| format!("{}: {e}", f.display()))?;
+                        (v, 0, format!("{} (saved response)", host_of(&prov.base)))
                     }
-                    println!("Asking {} ({})…", prov.model, prov.name);
-                    complete(&prov, &body)?
-                }
-            };
-            let parsed = assistant::parse_response(&response);
-            let mut exchange = Exchange {
-                provider: prov.name.clone(),
-                model: prov.model.clone(),
-                host,
-                request: body.clone(),
-                response: response.clone(),
-                latency_ms,
-                problems: parsed.as_ref().err().cloned(),
-                corrects: None,
-            };
-            let mut hash =
-                assistant::record_exchange(&mut p, &mut e, &exchange).map_err(|e| e.to_string())?;
-            let parsed = match parsed {
-                Ok(proposal) => proposal,
-                Err(problems) if a.response_file.is_none() => {
-                    println!(
-                        "The proposal could not be used ({}); asking once to correct it.",
-                        problems.join("; ")
-                    );
-                    let fix = assistant::build_correction(&request, &response, &problems)?;
-                    let fix_body = fix.to_string();
-                    let (response, latency_ms, host) = complete(&prov, &fix_body)?;
-                    let again = assistant::parse_response(&response);
-                    exchange = Exchange {
-                        host,
-                        request: fix_body,
-                        response,
-                        latency_ms,
-                        problems: again.as_ref().err().cloned(),
-                        corrects: Some(hash.clone()),
-                        ..exchange
-                    };
-                    hash = assistant::record_exchange(&mut p, &mut e, &exchange)
-                        .map_err(|e| e.to_string())?;
-                    again.map_err(|pr| {
-                        format!("the model's proposal could not be used: {}", pr.join("; "))
-                    })?
-                }
-                Err(problems) => {
-                    return Err(format!(
-                        "the model's proposal could not be used: {}",
-                        problems.join("; ")
-                    ))
+                    None => {
+                        if prov.name == "deepseek" && prov.key.is_none() {
+                            return Err(
+                                "set DEEPSEEK_API_KEY (or NLAE_API_KEY) to ask DeepSeek".into()
+                            );
+                        }
+                        println!("Asking {} ({})…", prov.model, prov.name);
+                        complete(&prov, &body)?
+                    }
+                };
+                let next = assistant::next_round(&request, &response, rounds)?;
+                let exchange = Exchange {
+                    provider: prov.name.clone(),
+                    model: prov.model.clone(),
+                    host,
+                    request: body,
+                    response,
+                    latency_ms,
+                    problems: next.problems(),
+                    corrects: corrects.take(),
+                    describes: describes.take(),
+                };
+                let hash = assistant::record_exchange(&mut p, &mut e, &exchange)
+                    .map_err(|e| e.to_string())?;
+                // With saved responses, a round needs one of its own.
+                let spent = saving && saved.peek().is_none();
+                match next {
+                    NextRound::Done { proposal } => break (proposal, hash),
+                    NextRound::Failed { problems } => {
+                        return Err(format!(
+                            "the model's proposal could not be used: {}",
+                            problems.join("; ")
+                        ))
+                    }
+                    NextRound::Correct { problems, .. } if spent => {
+                        return Err(format!(
+                            "the model's proposal could not be used: {}",
+                            problems.join("; ")
+                        ))
+                    }
+                    NextRound::Correct {
+                        request: r,
+                        problems,
+                    } => {
+                        println!(
+                            "The proposal could not be used ({}); asking once to correct it.",
+                            problems.join("; ")
+                        );
+                        rounds.corrected = true;
+                        corrects = Some(hash);
+                        request = r;
+                    }
+                    NextRound::Describe { ids, .. } if spent => {
+                        let ids = ids.join(", ");
+                        return Err(format!(
+                            "the model asked to see {ids}; no saved response is left for the next round"
+                        ));
+                    }
+                    NextRound::Describe { request: r, ids } => {
+                        println!(
+                            "The model asked to see {}; asking again with them.",
+                            ids.join(", ")
+                        );
+                        rounds.described = true;
+                        describes = Some(hash);
+                        request = r;
+                    }
                 }
             };
             if let Some(t) = &parsed.text {

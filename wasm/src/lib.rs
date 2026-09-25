@@ -12,7 +12,9 @@ use nlae_core::analysis::spectrogram::{
     spectrogram as draw, spectrogram_columns, SpectrogramRequest,
 };
 use nlae_core::analysis::{features, peaks::peaks};
-use nlae_core::assistant::{self, Dictation, Exchange, Proposal, RoutedStep, Selection, Turn};
+use nlae_core::assistant::{
+    self, Dictation, Exchange, NextRound, Proposal, Rounds, RoutedStep, Selection, Turn,
+};
 use nlae_core::audio::decode;
 use nlae_core::audio::wav::{write_wav_with_cues, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
@@ -177,29 +179,29 @@ pub fn route(words: &str, selection: JsValue) -> Result<JsValue, JsValue> {
     to_js(&assistant::route(words, sel.as_ref()))
 }
 
-/// Check a model's answer: `{ proposal }` or `{ problems }`.
+/// What a model's answer calls for next, by the core's policy (one round to
+/// describe operations the model asked to see, one to correct an answer):
+/// `{ next: "done", proposal }`, `{ next: "describe", request, ids }`,
+/// `{ next: "correct", request, problems }` or `{ next: "failed", problems }`.
+/// A follow-up request comes back as JSON text, to be sent as it is.
 #[wasm_bindgen]
-pub fn parse_response(response: &str) -> Result<JsValue, JsValue> {
-    let v: Value = serde_json::from_str(response).map_err(js_err)?;
-    match assistant::parse_response(&v) {
-        Ok(p) => to_js(&serde_json::json!({ "proposal": p })),
-        Err(problems) => to_js(&serde_json::json!({ "problems": problems })),
-    }
-}
-
-/// A follow-up request asking the model to correct an answer that could not be used.
-#[wasm_bindgen]
-pub fn correction_request(
-    request: &str,
-    response: &str,
-    problems: JsValue,
-) -> Result<String, JsValue> {
+pub fn next_round(request: &str, response: &str, rounds: JsValue) -> Result<JsValue, JsValue> {
     let req: Value = serde_json::from_str(request).map_err(js_err)?;
     let resp: Value = serde_json::from_str(response).map_err(js_err)?;
-    let problems: Vec<String> = serde_wasm_bindgen::from_value(problems).map_err(js_err)?;
-    Ok(assistant::build_correction(&req, &resp, &problems)
-        .map_err(js_err)?
-        .to_string())
+    let rounds: Rounds = serde_wasm_bindgen::from_value(rounds).map_err(js_err)?;
+    let v = match assistant::next_round(&req, &resp, rounds).map_err(js_err)? {
+        NextRound::Done { proposal } => serde_json::json!({ "next": "done", "proposal": proposal }),
+        NextRound::Describe { request, ids } => {
+            serde_json::json!({ "next": "describe", "request": request.to_string(), "ids": ids })
+        }
+        NextRound::Correct { request, problems } => {
+            serde_json::json!({ "next": "correct", "request": request.to_string(), "problems": problems })
+        }
+        NextRound::Failed { problems } => {
+            serde_json::json!({ "next": "failed", "problems": problems })
+        }
+    };
+    to_js(&v)
 }
 
 /// The query for streaming dictation to the recogniser: `[name, value]` pairs,
