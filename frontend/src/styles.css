@@ -668,6 +668,22 @@ button.accept {
   min-width: 0;
 }
 
+.console button.mic.listening {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.console .mic-status {
+  color: var(--accent);
+  margin-top: 4px;
+}
+
+.console .mic-error {
+  color: var(--bad);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 .stack-actions {
   display: flex;
   flex-wrap: wrap;
@@ -727,6 +743,13 @@ button.accept {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.modal h4 {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
 }
 
 .modal .good {

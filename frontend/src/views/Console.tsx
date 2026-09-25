@@ -1,11 +1,14 @@
-// The console: say what you want. Routine requests are handled locally; the
-// rest go to the chosen model with words and analysis numbers only. Every
-// proposal is previewed on a short window and waits for Accept or Reject;
-// values can be changed first (recorded as a modification).
+// The console: say what you want, typed or spoken. Routine requests are
+// handled locally; the rest go to the chosen model with words and analysis
+// numbers only. Every proposal is previewed on a short window and waits for
+// Accept or Reject; values can be changed first (recorded as a modification).
+// Spoken words fill the box as they are recognised and are sent, like typed
+// ones, with Enter; what was heard is logged next to what was sent.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { compose, Listening, loadSpeechConfig, SPEECH_PROVIDER, type Listened } from "../assistant/dictation";
 import { complete, loadConfig, type ProviderConfig } from "../assistant/provider";
 import { core } from "../core/client";
-import type { PreviewRecord, PreviewResult, ProjectSummary, Selection, Step, Turn, Which } from "../core/types";
+import type { PreviewRecord, PreviewResult, ProjectSummary, Segment, Selection, Step, Turn, Which } from "../core/types";
 import { debug } from "../debug";
 import { Settings } from "./Settings";
 import { describe } from "./StackPanel";
@@ -26,7 +29,26 @@ interface ConsoleTurn {
   problems?: string[];
   preview?: PreviewRecord;
   outcome?: string;
+  /** The words were dictated (possibly changed before sending). */
+  spoken?: boolean;
 }
+
+/** The dictation behind the words in the box, until they are sent or cleared. */
+interface Spoken {
+  model: string;
+  host: string;
+  params: [string, string][];
+  requestIds: string[];
+  segments: Segment[];
+  audioS: number;
+  latencyMs: number;
+}
+
+type Mic = "off" | "starting" | "listening" | "finishing";
+
+/** Listening stops by itself after this long, or this long without speech. */
+const MAX_LISTEN_MS = 30_000;
+const NO_SPEECH_MS = 8_000;
 
 interface Props {
   summary: ProjectSummary;
@@ -41,6 +63,8 @@ interface Props {
   save: () => Promise<void>;
   /** A request made with a button elsewhere; handled as if typed (each new `n` once). */
   request?: { words: string; n: number } | null;
+  /** The microphone opened (true) or closed: playback pauses meanwhile, so no recording is streamed. */
+  onDictating: (on: boolean) => void;
 }
 
 type Descriptor = {
@@ -201,7 +225,7 @@ function ProposalCard({
   );
 }
 
-export function Console({ summary, selection, unavailable, onSummary, onListen, onPreview, onError, save, request }: Props) {
+export function Console({ summary, selection, unavailable, onSummary, onListen, onPreview, onError, save, request, onDictating }: Props) {
   const id = summary.id;
   const [turns, setTurns] = useState<ConsoleTurn[]>([]);
   const [words, setWords] = useState("");
@@ -212,6 +236,17 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
   const cfg = useMemo<ProviderConfig>(() => loadConfig(), [configVersion]);
+  // Dictation: the words fill the box as they are recognised; nothing is sent until Enter.
+  const [mic, setMic] = useState<Mic>("off");
+  const [micError, setMicError] = useState<string | null>(null);
+  const listening = useRef<Listening | null>(null);
+  // Each opening of the microphone; cancelling (or leaving) abandons one still opening.
+  const attempt = useRef(0);
+  const opening = useRef<AbortController | null>(null);
+  const typedBefore = useRef("");
+  const spoken = useRef<Spoken | null>(null);
+  const micTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const inputEl = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     core.descriptors().then((d) => setDescriptors(d as Descriptor[]), onError);
@@ -245,15 +280,163 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     onPreview({ record: r.record, window: r.window });
   };
 
+  const clearMicTimers = () => {
+    micTimers.current.forEach(clearTimeout);
+    micTimers.current = [];
+  };
+
+  const endListening = () => {
+    clearMicTimers();
+    setMic("off");
+    onDictating(false);
+    inputEl.current?.focus();
+  };
+
+  /** Keep what a listening session heard with the words in the box. */
+  const keepHeard = (r: Listened) => {
+    setWords(compose(typedBefore.current, r.heard.finals));
+    if (r.heard.finals.length === 0) return;
+    const s = spoken.current ?? {
+      model: r.params.find(([k]) => k === "model")?.[1] ?? loadSpeechConfig().model,
+      host: r.host,
+      params: r.params,
+      requestIds: [],
+      segments: [],
+      audioS: 0,
+      latencyMs: 0,
+    };
+    s.segments.push(...r.heard.finals);
+    if (r.heard.requestId) s.requestIds.push(r.heard.requestId);
+    s.audioS += r.audioS;
+    s.latencyMs = r.latencyMs;
+    spoken.current = s;
+  };
+
+  const finishListening = async () => {
+    const l = listening.current;
+    if (!l) return;
+    listening.current = null;
+    setMic("finishing");
+    clearMicTimers();
+    try {
+      keepHeard(await l.finish());
+    } catch (e) {
+      setMicError(e instanceof Error ? e.message : String(e));
+    } finally {
+      endListening();
+    }
+  };
+
+  /** Stop at once; the box goes back to what was typed before. */
+  const cancelListening = () => {
+    attempt.current++;
+    opening.current?.abort();
+    const l = listening.current;
+    listening.current = null;
+    l?.cancel();
+    setWords(typedBefore.current);
+    endListening();
+  };
+
+  const startListening = async () => {
+    if (listening.current || mic !== "off") return;
+    const speech = loadSpeechConfig();
+    if (!speech.key.trim()) {
+      setMicError("Add a Deepgram key in the settings (Speech) to dictate.");
+      setSettingsOpen(true);
+      return;
+    }
+    setMicError(null);
+    typedBefore.current = words;
+    setMic("starting");
+    onDictating(true);
+    const n = ++attempt.current;
+    const current = () => n === attempt.current;
+    const ac = new AbortController();
+    opening.current = ac;
+    try {
+      const l = await Listening.open(
+        speech,
+        (rate) => core.listenParams(speech.model, speech.language, rate, speech.optOut),
+        {
+          onHeard: (h) => {
+            if (current()) setWords(compose(typedBefore.current, h.finals, h.interim));
+          },
+          onPause: () => {
+            if (current()) void finishListening();
+          },
+          onFailure: (message, r) => {
+            if (!current()) return;
+            listening.current = null;
+            keepHeard(r);
+            setMicError(message);
+            endListening();
+          },
+        },
+        ac.signal,
+      );
+      if (!current()) {
+        // Cancelled, or the console closed, while the stream was opening.
+        l.cancel();
+        return;
+      }
+      listening.current = l;
+      setMic("listening");
+      micTimers.current = [
+        setTimeout(() => void finishListening(), MAX_LISTEN_MS),
+        setTimeout(() => {
+          if (listening.current && !listening.current.speech) void finishListening();
+        }, NO_SPEECH_MS),
+      ];
+    } catch (e) {
+      if (!current()) return;
+      setMicError(e instanceof Error ? e.message : String(e));
+      endListening();
+    } finally {
+      if (opening.current === ac) opening.current = null;
+    }
+  };
+
+  // Leaving the console closes the microphone.
+  useEffect(
+    () => () => {
+      attempt.current++;
+      opening.current?.abort();
+      listening.current?.cancel();
+      listening.current = null;
+      micTimers.current.forEach(clearTimeout);
+    },
+    [],
+  );
+
   const ask = async (text?: string) => {
     const w = (text ?? words).trim();
     if (!w || busy) return;
     const tid = next.current++;
     const open = turns.some((t) => t.status === "proposal");
-    setTurns((ts) => [...ts, { id: tid, words: w, via: null, status: "working" }]);
+    // Words from the box may have been dictated; a request made with a button was not.
+    const dictated = text === undefined ? spoken.current : null;
+    if (text === undefined) spoken.current = null;
+    setTurns((ts) => [...ts, { id: tid, words: w, via: null, status: "working", spoken: !!dictated }]);
     if (text === undefined) setWords("");
     setBusy(true);
     try {
+      // What was heard and what is sent are logged before anything is done with them.
+      let dictation: string | undefined;
+      if (dictated) {
+        dictation = await core.recordDictation(id, {
+          provider: SPEECH_PROVIDER,
+          model: dictated.model,
+          host: dictated.host,
+          params: dictated.params,
+          request_ids: dictated.requestIds,
+          segments: dictated.segments,
+          words: w,
+          audio_s: dictated.audioS,
+          latency_ms: dictated.latencyMs,
+        });
+        await save();
+      }
       const route = await core.route(w, selection);
       if (open && route.route !== "listen") {
         // Anything but listening sets an open proposal aside (it stays in the log, undecided).
@@ -275,12 +458,17 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
       } else if (route.route === "recipe") {
         await showPreview(
           tid,
-          await core.previewRecipe(id, route.name, w),
+          await core.previewRecipe(id, route.name, w, dictation),
           "local",
           `The built-in ${route.name} recipe, measured on this recording.`,
         );
       } else if (route.route === "steps") {
-        await showPreview(tid, await core.previewRouted(id, route.steps, w), "local", route.steps.map((s) => s.understood).join(" "));
+        await showPreview(
+          tid,
+          await core.previewRouted(id, route.steps, w, dictation),
+          "local",
+          route.steps.map((s) => s.understood).join(" "),
+        );
       } else {
         const config = loadConfig();
         update(tid, { via: "model", model: `${config.provider} · ${config.model}`, text: `Asking ${config.model}…` });
@@ -321,7 +509,7 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
         } else {
           await showPreview(
             tid,
-            await core.previewProposal(id, parsed.proposal!, w, config.model, config.provider, exchange),
+            await core.previewProposal(id, parsed.proposal!, w, config.model, config.provider, exchange, dictation),
             "model",
             parsed.proposal!.text ?? undefined,
           );
@@ -372,9 +560,21 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
           </p>
         )}
         {turns.map((t) => (
-          <div key={t.id} className={`turn ${t.status}`} data-testid="turn" data-status={t.status} data-via={t.via ?? ""}>
+          <div
+            key={t.id}
+            className={`turn ${t.status}`}
+            data-testid="turn"
+            data-status={t.status}
+            data-via={t.via ?? ""}
+            data-spoken={t.spoken ? "yes" : "no"}
+          >
             <div className="you">{t.words}</div>
-            {t.via && <div className="via">{t.via === "local" ? "handled here" : `via ${t.model}`}</div>}
+            {t.via && (
+              <div className="via">
+                {t.spoken ? "spoken · " : ""}
+                {t.via === "local" ? "handled here" : `via ${t.model}`}
+              </div>
+            )}
             {t.text && (
               <div className="reply" data-testid="turn-text">
                 {t.text}
@@ -414,20 +614,65 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
         className="ask"
         onSubmit={(e) => {
           e.preventDefault();
-          void ask();
+          if (mic === "off") void ask();
+        }}
+        onKeyDown={(e) => {
+          // While listening, Enter stops (the words stay in the box to be checked) and Escape discards.
+          if (mic === "off") return;
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (mic === "listening") void finishListening();
+          } else if (e.key === "Escape" && (mic === "starting" || mic === "listening")) {
+            e.preventDefault();
+            cancelListening();
+          }
         }}
       >
         <input
+          ref={inputEl}
           value={words}
-          onChange={(e) => setWords(e.target.value)}
-          placeholder={unavailable ?? "What should happen?"}
+          onChange={(e) => {
+            setWords(e.target.value);
+            if (!e.target.value.trim()) spoken.current = null;
+          }}
+          placeholder={unavailable ?? (mic === "off" ? "What should happen?" : "Listening…")}
           disabled={!!unavailable || busy}
+          readOnly={mic !== "off"}
           data-testid="console-input"
         />
-        <button type="submit" disabled={!!unavailable || busy || !words.trim()} data-testid="console-send">
+        <button
+          type="button"
+          className={`mic ${mic}`}
+          onClick={() => {
+            if (mic === "off") void startListening();
+            else if (mic === "listening") void finishListening();
+          }}
+          disabled={!!unavailable || busy || mic === "starting" || mic === "finishing"}
+          aria-pressed={mic !== "off"}
+          data-testid="console-mic"
+          data-state={mic}
+          title={
+            mic === "off"
+              ? "Speak your request (Deepgram). The words fill the box; press Enter to send them."
+              : "Stop listening (Enter). Escape discards what was heard."
+          }
+        >
+          {mic === "off" ? "Speak" : mic === "starting" ? "Opening…" : mic === "listening" ? "Stop" : "…"}
+        </button>
+        <button type="submit" disabled={!!unavailable || busy || !words.trim() || mic !== "off"} data-testid="console-send">
           {busy ? "…" : "Send"}
         </button>
       </form>
+      {mic === "listening" && (
+        <div className="mic-status small-text" data-testid="mic-status">
+          Listening. The words appear as they are recognised; Enter or Stop when done, Escape to discard.
+        </div>
+      )}
+      {micError && mic === "off" && (
+        <div className="mic-error small-text bad" data-testid="mic-error">
+          {micError}
+        </div>
+      )}
       {settingsOpen && (
         <Settings
           initial={cfg}

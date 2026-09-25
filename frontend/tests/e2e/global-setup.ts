@@ -1,11 +1,13 @@
 // Builds the fixtures with the command-line tool: a short golden clip, a
 // project processed with the built-in recipe and packed as a bundle (and
 // rendered to a WAV file), and a copy of that bundle with one logged value
-// changed. Starts the stand-in model provider for the console tests.
+// changed. Starts the stand-in model provider and the stand-in recogniser
+// for the console tests.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { startMockDeepgram } from "./mock-deepgram";
 import { startMockModel } from "./mock-model";
 import { FIX, REPO } from "./paths";
 import { patchStoredEntry } from "./zip";
@@ -109,6 +111,6 @@ export default async function globalSetup() {
   };
   writeFileSync(join(FIX, "fixtures.json"), JSON.stringify(fx, null, 2));
 
-  const mock = await startMockModel();
-  return () => new Promise<void>((resolve) => mock.close(() => resolve()));
+  const servers = [await startMockModel(), await startMockDeepgram()];
+  return () => Promise.all(servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
 }

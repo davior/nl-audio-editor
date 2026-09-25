@@ -4,7 +4,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { drag, fx, importClip, lanesDrawn, logged, nlae, say, start } from "./helpers";
+import { drag, fx, importClip, lanesDrawn, logged, nlae, say, start, whereStored } from "./helpers";
 import { MOCK_URL, seenByMock } from "./mock-model";
 
 const KEY = "sk-nlae-e2e-7c1f9a2b40d6";
@@ -215,24 +215,7 @@ test("6. the model is sent the selection, never audio, and the key is never stor
   }
 
   // Nowhere the app keeps things: the library, browser storage, or a bundle.
-  const stored = await page.evaluate(async (key) => {
-    const found: string[] = [];
-    let files = 0;
-    const walk = async (d: FileSystemDirectoryHandle, path: string) => {
-      // @ts-expect-error: entries() is available on directory handles in Chromium.
-      for await (const [name, h] of d.entries()) {
-        if (h.kind === "directory") await walk(h, `${path}${name}/`);
-        else {
-          files++;
-          if ((await (await h.getFile()).text()).includes(key)) found.push(`${path}${name}`);
-        }
-      }
-    };
-    await walk(await navigator.storage.getDirectory(), "");
-    for (const s of [localStorage, sessionStorage])
-      for (let i = 0; i < s.length; i++) if ((s.getItem(s.key(i)!) ?? "").includes(key)) found.push(`storage:${s.key(i)}`);
-    return { found, files };
-  }, KEY);
+  const stored = await whereStored(page, KEY);
   expect(stored.files).toBeGreaterThan(3);
   expect(stored.found).toEqual([]);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("save-bundle").click()]);
