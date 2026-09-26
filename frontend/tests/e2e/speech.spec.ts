@@ -51,12 +51,12 @@ test("1. dictated words fill the box as they are recognised, are corrected and s
   await box(page).fill("Cut 3100 to 3200 hertz by 12 dB.");
   await box(page).press("Enter");
   const turn = page.getByTestId("turn").first();
-  await expect(turn).toHaveAttribute("data-status", "proposal");
+  await expect(turn).toHaveAttribute("data-status", "applied");
   await expect(turn).toHaveAttribute("data-via", "local");
   await expect(turn).toHaveAttribute("data-spoken", "yes");
-  await expect(turn.getByTestId("proposal-step")).toHaveAttribute("data-op", "band_cut");
+  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "band_cut");
 
-  // What was heard and what was sent are logged first; the preview refers to them.
+  // What was heard and what was sent are logged first; the applied step refers to them.
   const [spoken] = await logged(page, "speech.transcribed");
   expect(spoken.actor.kind).toBe("user");
   expect(spoken.data).toMatchObject({
@@ -71,10 +71,10 @@ test("1. dictated words fill the box as they are recognised, are corrected and s
       { text: "by 10 dB.", confidence: 0.96 },
     ],
   });
-  const [preview] = await logged(page, "step.previewed");
-  expect(preview.data.dictation).toBe(spoken.hash);
-  expect(preview.seq).toBeGreaterThan(spoken.seq);
-  expect((preview.data.steps as { intent: string; params: Record<string, unknown> }[])[0]).toMatchObject({
+  const [applied] = await logged(page, "step.applied");
+  expect(applied.data.dictation).toBe(spoken.hash);
+  expect(applied.seq).toBeGreaterThan(spoken.seq);
+  expect((applied.data.steps as { intent: string; params: Record<string, unknown> }[])[0]).toMatchObject({
     intent: "Cut 3100 to 3200 hertz by 12 dB.",
     params: { depth_db: 12 },
   });
@@ -108,7 +108,7 @@ test("2. a dictated “undo” waits in the box until Enter", async ({ page }) =
   await start(page);
   await importClip(page);
   const cut = await say(page, "cut 3,100 to 3,200 Hz by 12 dB");
-  await cut.getByTestId("accept").click();
+  await expect(cut).toHaveAttribute("data-status", "applied");
   await expect(page.getByTestId("stack-step")).toHaveCount(1);
   await useSpeech(page, key);
 
@@ -125,8 +125,9 @@ test("2. a dictated “undo” waits in the box until Enter", async ({ page }) =
   await expect(page.getByTestId("stack-step")).toHaveCount(0);
   const [spoken] = await logged(page, "speech.transcribed");
   expect(spoken.data).toMatchObject({ heard: "Undo.", words: "Undo.", edited: false });
-  const [removed] = await logged(page, "step.excluded");
-  expect(removed.seq).toBeGreaterThan(spoken.seq);
+  const [undone] = await logged(page, "step.excluded");
+  expect(undone.seq).toBeGreaterThan(spoken.seq);
+  expect(typeof undone.data.undoes).toBe("string");
 });
 
 test("3. while listening, Escape discards what was heard, and Enter only stops, leaving the words to check", async ({ page }) => {

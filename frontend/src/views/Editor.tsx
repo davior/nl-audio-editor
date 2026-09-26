@@ -10,8 +10,9 @@ import { sync } from "../storage/sync";
 import { IntegrityBadge } from "./IntegrityBadge";
 import { Spectrogram, TimeAxis, Waveform } from "./Lanes";
 import { LogViewer, type LogFailure } from "./LogViewer";
-import { Console, type PreviewInfo } from "./Console";
-import { StackPanel } from "./StackPanel";
+import { Console } from "./Console";
+import { StackPanel, type StackActions } from "./StackPanel";
+import { useDescriptors } from "./StepEditor";
 import { DB_RANGES, fit, follow, restoreView, scroll, showRange, zoom } from "./viewState";
 
 export interface EditorProps {
@@ -27,19 +28,34 @@ export interface EditorProps {
   flushRef: React.MutableRefObject<(() => Promise<void>) | null>;
 }
 
-const MONITORS: { which: Which; label: string; title: string }[] = [
-  { which: "source", label: "Original", title: "The recording as imported, untouched" },
-  { which: "stack", label: "Processed", title: "The recording through the stack" },
-  { which: "residual", label: "Residual", title: "What the stack removed, at the level it would have had" },
+type Monitor = { which: Which; label: string; title: string; testId: string };
+
+const MONITORS: Monitor[] = [
+  { which: "source", label: "Original", title: "The recording as imported, untouched", testId: "monitor-source" },
+  { which: "stack", label: "Processed", title: "The recording through the stack", testId: "monitor-stack" },
+  {
+    which: "residual",
+    label: "Residual",
+    title: "What the stack removed, at the level it would have had",
+    testId: "monitor-residual",
+  },
 ];
 
-// While a proposal is previewed: its window only.
-const PREVIEW_MONITORS: { which: Which; label: string; title: string }[] = [
-  { which: "preview:original", label: "Original", title: "The recording as imported" },
-  { which: "preview:before", label: "Before", title: "The stack as it is, without the proposal" },
-  { which: "preview:output", label: "Processed", title: "With the proposal" },
-  { which: "preview:residual", label: "Residual", title: "What the proposal would remove" },
-];
+/** With a step selected: that step on its own, over the whole recording. */
+function stepMonitors(id: string, op: string): Monitor[] {
+  return [
+    {
+      which: `step:${id}:before`,
+      label: "Before this step",
+      title: `The recording through the steps below ${op}`,
+      testId: "monitor-step-before",
+    },
+    { which: `step:${id}:after`, label: "After it", title: `The same, with ${op}`, testId: "monitor-step-after" },
+    { which: `step:${id}:removed`, label: "What it removed", title: `What ${op} took out: before − after`, testId: "monitor-step-removed" },
+  ];
+}
+
+const isTimeEdit = (op: string) => op === "remove_time" || op === "insert_silence";
 
 type ExportFormat = "f32" | "pcm24" | "pcm16";
 
@@ -86,11 +102,9 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const [width, setWidth] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [renderHash, setRenderHash] = useState<{ which: Which; hash: string } | null>(null);
-  // An open proposal: the lanes and playback show its window.
-  const [preview, setPreview] = useState<PreviewInfo | null>(null);
-  const previewRef = useRef<PreviewInfo | null>(null);
-  previewRef.current = preview;
-  const viewBeforePreview = useRef<ViewState | null>(null);
+  // The step selected in the stack: its values can be changed, and it can be heard on its own.
+  const [selected, setSelected] = useState<string | null>(null);
+  const descriptors = useDescriptors(onError);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("f32");
   // Where the stack's time edits put the original in the output.
   const [editMap, setEditMap] = useState<EditMap | null>(null);
@@ -176,8 +190,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const pendingSave = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveView = useCallback(async () => {
     pendingSave.current = null;
-    const v = previewRef.current ? viewBeforePreview.current : viewRef.current;
-    if (!v) return;
+    // A step's own monitor lasts while it is selected; the saved view says Processed.
+    const v = viewRef.current.monitor.startsWith("step:") ? { ...viewRef.current, monitor: "stack" as Which } : viewRef.current;
     await core.setView(id, v);
     if (!detached) await sync(id, m);
     debug("viewSaved", v);
@@ -191,8 +205,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       debug("viewSaved", view);
       return;
     }
-    // The preview's zoom is not kept: the view before it comes back afterwards.
-    if (readOnly || previewRef.current) return;
+    if (readOnly) return;
     if (pendingSave.current) clearTimeout(pendingSave.current);
     pendingSave.current = setTimeout(() => saveView().catch(onError), 300);
   }, [view, readOnly, saveView, onError]);
@@ -233,12 +246,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       .pcm(id, edited ? "output" : view.monitor)
       .then((pcm) => {
         if (!live) return;
-        // Preview audio covers only the preview window.
-        p.load(
-          pcm,
-          view.monitor.startsWith("preview:") ? (previewRef.current?.window[0] ?? 0) : 0,
-          edited ? new TimeMap(editMap.pieces) : null,
-        );
+        p.load(pcm, 0, edited ? new TimeMap(editMap.pieces) : null);
         debug("monitorLoaded", view.monitor);
         if (was !== null && !dictatingRef.current) void p.play(was).then(() => setPlaying(true));
         else setPlaying(false);
@@ -247,7 +255,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     return () => {
       live = false;
     };
-  }, [id, view.monitor, onError, lanesReady, preview, editMap]);
+  }, [id, view.monitor, onError, lanesReady, editMap]);
 
   useEffect(() => {
     const p = player.current;
@@ -306,10 +314,6 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       setPlayhead(t);
     } else if (loop && selectionSpan) {
       void play(selectionSpan.t0, selectionSpan.t1, true);
-    } else if (previewRef.current) {
-      // A preview plays its window (round and round with Loop on).
-      const [w0, w1] = previewRef.current.window;
-      void play(playhead >= w0 && playhead < w1 - 1e-3 ? playhead : w0, w1, loop);
     } else {
       void play(playhead >= duration - 1e-3 ? 0 : playhead);
     }
@@ -388,46 +392,8 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     }
   };
 
-  const playheadBeforePreview = useRef(0);
-  const openPreview = (p: PreviewInfo | null, accepted = false) => {
-    player.current.stop();
-    setPlaying(false);
-    if (p) {
-      if (!previewRef.current) {
-        viewBeforePreview.current = viewRef.current;
-        playheadBeforePreview.current = playhead;
-      }
-      previewRef.current = p;
-      setPreview(p);
-      setPlayhead(p.window[0]);
-      // A time edit changes the length, so its result cannot be drawn on the
-      // original's timeline: show the stretch on "Before"; "Processed" plays the result.
-      const timeEdit = p.record.steps.some((st) => st.op === "remove_time" || st.op === "insert_silence");
-      setView((v) => ({ ...v, t0: p.window[0], t1: p.window[1], monitor: timeEdit ? "preview:before" : "preview:output" }));
-    } else if (previewRef.current) {
-      const back = viewBeforePreview.current;
-      viewBeforePreview.current = null;
-      previewRef.current = null;
-      setPreview(null);
-      setPlayhead(playheadBeforePreview.current);
-      setView((v) => ({
-        ...v,
-        ...(back ? { t0: back.t0, t1: back.t1 } : {}),
-        monitor: accepted || !back ? "stack" : back.monitor,
-      }));
-    }
-  };
-
-  useEffect(
-    () => debug("preview", preview ? { id: preview.record.preview_id, window: preview.window, steps: preview.record.steps.length } : null),
-    [preview],
-  );
-
-  // "Play the residual" and the like; during a preview, its own monitors.
-  const listen = (which: Which) => {
-    const inPreview: Partial<Record<Which, Which>> = { source: "preview:original", stack: "preview:output", residual: "preview:residual" };
-    update({ monitor: previewRef.current ? (inPreview[which] ?? which) : which });
-  };
+  // "Play the residual" and the like.
+  const listen = (which: Which) => update({ monitor: which });
 
   const save = useCallback(() => (detached ? Promise.resolve() : sync(id, m)), [detached, id, m]);
 
@@ -444,35 +410,44 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
 
   const askConsole = (words: string) => setConsoleRequest((r) => ({ words, n: (r?.n ?? 0) + 1 }));
 
-  // Removed stretches (shaded) and inserted silences (marked) on the lanes,
-  // accepted ones and the one being previewed.
+  // Removed stretches (shaded) and inserted silences (marked) on the lanes.
   const overlay = (() => {
     if (width <= 0) return [];
     const span = view.t1 - view.t0;
     const x = (t: number) => ((t - view.t0) / span) * width;
-    const items: { kind: "removed" | "inserted"; from: number; to: number; label: string; proposed: boolean }[] = [];
+    const items: { kind: "removed" | "inserted"; from: number; to: number; label: string }[] = [];
     for (const m of editMap?.marks ?? []) {
-      if (m.kind === "removed")
-        items.push({ kind: "removed", from: m.from_s, to: m.to_s, label: `removed ${m.duration_s.toFixed(3)} s`, proposed: false });
-      else items.push({ kind: "inserted", from: m.at_s, to: m.at_s, label: `+${m.duration_s.toFixed(3)} s silence`, proposed: false });
-    }
-    for (const st of preview?.record.steps ?? []) {
-      const sc = st.scope as { kind: string; t0?: number; t1?: number };
-      const r = st.resolved as Record<string, number>;
-      if (st.op === "remove_time" && sc.t0 !== undefined && sc.t1 !== undefined)
-        items.push({ kind: "removed", from: sc.t0, to: sc.t1, label: "to be removed", proposed: true });
-      if (st.op === "insert_silence")
-        items.push({ kind: "inserted", from: r.at_s, to: r.at_s, label: `+${r.duration_s.toFixed(3)} s silence?`, proposed: true });
+      if (m.kind === "removed") items.push({ kind: "removed", from: m.from_s, to: m.to_s, label: `removed ${m.duration_s.toFixed(3)} s` });
+      else items.push({ kind: "inserted", from: m.at_s, to: m.at_s, label: `+${m.duration_s.toFixed(3)} s silence` });
     }
     return items.map((it) => ({ ...it, x0: x(it.from), x1: x(it.to) })).filter((it) => it.x1 >= 0 && it.x0 <= width);
   })();
 
-  const undo = () =>
-    act("Removing the last step…", async () => {
-      const s = await core.removeTop(id);
+  // Changes to the stack. The steps above a change keep their values and are
+  // rendered again, unless their input did not change.
+  const rendering = (stepId: string, including: boolean) => {
+    const entries = summary.state.entries;
+    const at = entries.findIndex((e) => e.step_id === stepId);
+    const n = entries.slice(at + 1).filter((e) => e.active).length + (including ? 1 : 0);
+    return n > 0 ? `Re-rendering ${n} step${n === 1 ? "" : "s"}…` : "Updating the stack…";
+  };
+  const change = (label: string, f: () => Promise<ProjectSummary>) =>
+    act(label, async () => {
+      const s = await f();
       await save();
       onChanged(s);
     });
+  const actions: StackActions | undefined = readOnly
+    ? undefined
+    : {
+        remove: (sid, reason) => change(rendering(sid, false), () => core.exclude(id, [sid], reason)),
+        restore: (sid) => change(rendering(sid, true), () => core.restore(id, [sid])),
+        edit: (sid, changes) => change(rendering(sid, true), () => core.editStep(id, sid, changes)),
+        remeasure: (sid) => change(rendering(sid, true), () => core.remeasure(id, sid)),
+        remeasureDiff: (sid) => core.remeasureDiff(id, sid),
+        undo: () => change("Undoing…", async () => (await core.undo(id)).summary),
+        redo: () => change("Redoing…", async () => (await core.redo(id)).summary),
+      };
 
   const rate = (overall: number) =>
     act("Recording the rating…", async () => {
@@ -519,6 +494,18 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   const lineage = m.lineage;
   const forkIndex = lineage?.forked_at_step ? summary.state.steps.findIndex((s) => s.step_id === lineage.forked_at_step) : -1;
 
+  // The selected step's own monitors (not for time edits: the lanes mark those).
+  const selectedStep = selected ? (summary.state.steps.find((s) => s.step_id === selected) ?? null) : null;
+  const monitors =
+    selectedStep && !isTimeEdit(selectedStep.op) ? [...MONITORS, ...stepMonitors(selectedStep.step_id, selectedStep.op)] : MONITORS;
+  const stepMonitor = view.monitor.startsWith("step:");
+  const monitorOk = !stepMonitor || monitors.some((mo) => mo.which === view.monitor);
+  useEffect(() => {
+    // A step removed from the stack is no longer selected; its monitors go with it.
+    if (selected && !summary.state.steps.some((s) => s.step_id === selected)) setSelected(null);
+    if (!monitorOk) setView((v) => ({ ...v, monitor: "stack" }));
+  }, [selected, summary.state, monitorOk]);
+
   const laneProps = {
     projectId: id,
     which: view.monitor,
@@ -532,7 +519,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     onSelectTf: (tfSelection: ViewState["tfSelection"]) => update({ tfSelection }),
     onZoom: (factor: number, around: number) => setView((v) => zoom(v, factor, around, duration)),
     onScroll: (dt: number) => setView((v) => scroll(v, dt, duration)),
-    renderKey: preview ? `preview:${preview.record.preview_id}` : summary.state.stack_hash,
+    renderKey: summary.state.stack_hash,
     onComplete: () => setLanesReady(true),
   };
 
@@ -578,9 +565,9 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           </select>
           <button
             onClick={exportWav}
-            disabled={!!readOnly || !!busy || !!preview}
+            disabled={!!readOnly || !!busy}
             data-testid="export-wav"
-            title="The stack with the final limiter, as a WAV file (logged with its hashes)"
+            title="The stack as it stands, with the final limiter, as a WAV file. Exporting approves the stack; it is logged with its hashes"
           >
             Export WAV
           </button>
@@ -643,13 +630,13 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           </span>
         </div>
         <div className="group" role="radiogroup" aria-label="Monitor">
-          {(preview ? PREVIEW_MONITORS : MONITORS).map((mo) => (
+          {monitors.map((mo) => (
             <button
               key={mo.which}
               className={view.monitor === mo.which ? "on" : ""}
               onClick={() => update({ monitor: mo.which })}
               title={mo.title}
-              data-testid={`monitor-${mo.which}`}
+              data-testid={mo.testId}
               aria-pressed={view.monitor === mo.which}
             >
               {mo.label}
@@ -739,19 +726,14 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
                   it.kind === "removed" ? (
                     <div
                       key={i}
-                      className={`edit-removed${it.proposed ? " proposed" : ""}`}
+                      className="edit-removed"
                       style={{ left: Math.max(0, it.x0), width: Math.max(1, Math.min(width, it.x1) - Math.max(0, it.x0)) }}
-                      data-testid={it.proposed ? "edit-proposed" : "edit-removed"}
+                      data-testid="edit-removed"
                     >
                       <span>{it.label}</span>
                     </div>
                   ) : (
-                    <div
-                      key={i}
-                      className={`edit-inserted${it.proposed ? " proposed" : ""}`}
-                      style={{ left: it.x0 }}
-                      data-testid={it.proposed ? "edit-proposed" : "edit-inserted"}
-                    >
+                    <div key={i} className="edit-inserted" style={{ left: it.x0 }} data-testid="edit-inserted">
                       <span>{it.label}</span>
                     </div>
                   ),
@@ -778,7 +760,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
               disabled={!!consoleUnavailable}
               onClick={() => askConsole(`remove ${view.selection!.t0.toFixed(3)} to ${view.selection!.t1.toFixed(3)} s`)}
               data-testid="remove-stretch"
-              title="Leave this stretch out of the output (previewed first; the original is untouched)"
+              title="Leave this stretch out of the output (the original is untouched)"
             >
               Remove this stretch
             </button>
@@ -824,7 +806,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
         unavailable={consoleUnavailable}
         onSummary={onChanged}
         onListen={listen}
-        onPreview={openPreview}
+        onSelectStep={setSelected}
         onError={onError}
         save={save}
         request={consoleRequest}
@@ -837,7 +819,11 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           onClone={clone}
           canClone={!readOnly && !busy}
           brokenAtLine={failure ? Number(failure.line) : null}
-          onUndo={readOnly || busy || preview ? undefined : undo}
+          actions={actions}
+          busy={!!busy}
+          selected={selected}
+          onSelect={setSelected}
+          descriptors={descriptors}
           onRate={readOnly || busy ? undefined : rate}
           output={editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null}
         />
@@ -874,7 +860,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
                     }
                   }}
                 >
-                  compute ({[...MONITORS, ...PREVIEW_MONITORS].find((x) => x.which === view.monitor)?.label})
+                  compute ({monitors.find((x) => x.which === view.monitor)?.label})
                 </button>
               )}
             </dd>

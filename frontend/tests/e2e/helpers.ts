@@ -96,7 +96,7 @@ export async function say(page: Page, words: string): Promise<Locator> {
   await page.getByTestId("console-send").click();
   await expect(turns).toHaveCount(n + 1);
   const turn = turns.nth(n);
-  await expect(turn).toHaveAttribute("data-status", /^(proposal|reply|done|error)$/);
+  await expect(turn).toHaveAttribute("data-status", /^(applied|reply|done|error)$/);
   return turn;
 }
 

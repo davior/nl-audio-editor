@@ -18,9 +18,7 @@ use nlae_core::assistant::{
 use nlae_core::audio::decode;
 use nlae_core::audio::wav::{write_wav_with_cues, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
-use nlae_core::project::{
-    bundle, AcceptOptions, CreateOptions, Origin, Preview, PreviewOptions, Project,
-};
+use nlae_core::project::{bundle, ApplyOptions, CreateOptions, Origin, Project};
 use nlae_core::provenance::env::{format_rfc3339_ms, ulid};
 use nlae_core::provenance::Actor;
 use nlae_core::provenance::{AppInfo, Env};
@@ -231,48 +229,23 @@ pub fn parity() -> Result<JsValue, JsValue> {
 pub struct WasmProject {
     project: Project<TrackingStore>,
     report: Value,
-    /// The open preview's audio, for the preview monitor.
-    preview: Option<Preview>,
 }
 
 impl WasmProject {
     fn new(project: Project<TrackingStore>, report: Value) -> Self {
-        WasmProject {
-            project,
-            report,
-            preview: None,
-        }
+        WasmProject { project, report }
     }
 
-    fn keep_preview(&mut self, pv: Preview) -> Result<JsValue, JsValue> {
-        let out = to_js(&serde_json::json!({ "record": pv.record, "window": pv.record.window }))?;
-        self.preview = Some(pv);
-        Ok(out)
-    }
-
-    /// Borrowed: the recording is not copied for every redraw. The open
-    /// preview's audio is `preview:original|before|output|residual`; it covers
-    /// only the preview window, which starts at the returned offset (seconds).
-    fn audio_at(&mut self, which: &str) -> Result<(&nlae_core::audio::AudioBuffer, f64), JsValue> {
-        if let Some(part) = which.strip_prefix("preview:") {
-            let pv = self
-                .preview
-                .as_ref()
-                .ok_or_else(|| js_err("no preview is open"))?;
-            let a = match part {
-                "original" => &pv.original,
-                "before" => &pv.before,
-                "output" => &pv.output,
-                "residual" => &pv.residual,
-                other => return Err(js_err(format!("unknown preview audio `{other}`"))),
-            };
-            return Ok((a, pv.record.window[0]));
-        }
-        Ok((self.project.audio(which).map_err(js_err)?, 0.0))
-    }
-
+    /// Borrowed: the recording is not copied for every redraw. One step on its
+    /// own, over the whole recording, is `step:<id>:before|after|removed`.
     fn audio(&mut self, which: &str) -> Result<&nlae_core::audio::AudioBuffer, JsValue> {
-        Ok(self.audio_at(which)?.0)
+        if let Some(rest) = which.strip_prefix("step:") {
+            let (id, part) = rest
+                .rsplit_once(':')
+                .ok_or_else(|| js_err(format!("`{which}`: use step:<id>:before|after|removed")))?;
+            return self.project.step_audio(id, part).map_err(js_err);
+        }
+        self.project.audio(which).map_err(js_err)
     }
 
     fn which(&mut self, which: &str) -> Result<nlae_core::audio::AudioBuffer, JsValue> {
@@ -429,15 +402,14 @@ impl WasmProject {
         t1: f64,
         columns: u32,
     ) -> Result<Float32Array, JsValue> {
-        let (a, offset) = self.audio_at(which)?;
-        let (t0, t1) = (t0 - offset, t1 - offset);
+        let a = self.audio(which)?;
         let cols = columns as usize;
         let dur = a.duration_s();
         let p = if t0 >= 0.0 && t1 <= dur {
             peaks(a, a.time_to_sample(t0), a.time_to_sample(t1), cols)
         } else {
-            // The view reaches past the audio (a preview window, zoomed out):
-            // columns keep their place in time, and are empty where there is no audio.
+            // The view reaches past the audio (zoomed out past its end): columns
+            // keep their place in time, and are empty where there is no audio.
             let span = (t1 - t0) / cols.max(1) as f64;
             (0..cols)
                 .map(|c| {
@@ -456,16 +428,13 @@ impl WasmProject {
 
     /// Spectrogram levels (0–255, rows × columns, top row = highest frequency).
     pub fn spectrogram(&mut self, which: &str, request: JsValue) -> Result<Uint8Array, JsValue> {
-        let mut req: SpectrogramRequest =
-            serde_wasm_bindgen::from_value(request).map_err(js_err)?;
-        let (a, offset) = self.audio_at(which)?;
-        req.t0 -= offset;
-        req.t1 -= offset;
+        let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
+        let a = self.audio(which)?;
         Ok(Uint8Array::from(draw(a, &req).as_slice()))
     }
 
-    /// Render hash of `source`, `stack` or `residual`: the same hash native
-    /// builds record as a step's `output_hash`.
+    /// Render hash of `source`, `stack`, `residual` or one step's audio: the
+    /// same hash native builds record as a step's `output_hash`.
     pub fn render_hash(&mut self, which: &str) -> Result<String, JsValue> {
         Ok(self.audio(which)?.render_hash())
     }
@@ -478,19 +447,17 @@ impl WasmProject {
         c0: u32,
         c1: u32,
     ) -> Result<Uint8Array, JsValue> {
-        let mut req: SpectrogramRequest =
-            serde_wasm_bindgen::from_value(request).map_err(js_err)?;
-        let (a, offset) = self.audio_at(which)?;
-        req.t0 -= offset;
-        req.t1 -= offset;
+        let req: SpectrogramRequest = serde_wasm_bindgen::from_value(request).map_err(js_err)?;
+        let a = self.audio(which)?;
         Ok(Uint8Array::from(
             spectrogram_columns(a, &req, c0 as usize, c1 as usize).as_slice(),
         ))
     }
 
-    /// Preview steps the router made from the user's words. `dictation` is the
-    /// `speech.transcribed` event the words came from, when they were spoken.
-    pub fn preview_routed(
+    /// Apply steps the router made from the user's words, at once. `dictation`
+    /// is the `speech.transcribed` event the words came from, when they were
+    /// spoken. Returns the steps as recorded.
+    pub fn apply_routed(
         &mut self,
         steps: JsValue,
         words: &str,
@@ -501,19 +468,20 @@ impl WasmProject {
             .iter()
             .map(|s| s.draft(Origin::Console, words))
             .collect();
-        let opts = PreviewOptions {
+        let opts = ApplyOptions {
             dictation,
             ..Default::default()
         };
-        let pv = self
+        let applied = self
             .project
-            .preview(&mut WebEnv, drafts, opts)
+            .apply(&mut WebEnv, drafts, opts)
             .map_err(js_err)?;
-        self.keep_preview(pv)
+        to_js(&serde_json::json!({ "steps": applied }))
     }
 
-    /// Replay a built-in recipe on this recording as one plan, and preview it.
-    pub fn preview_recipe(
+    /// Replay a built-in recipe on this recording as one plan, applied at once.
+    /// Returns the steps as recorded and the dry-run diff.
+    pub fn apply_recipe(
         &mut self,
         name: &str,
         words: &str,
@@ -521,11 +489,11 @@ impl WasmProject {
     ) -> Result<JsValue, JsValue> {
         let recipe =
             Recipe::builtin(name).ok_or_else(|| js_err(format!("no built-in recipe `{name}`")))?;
-        let opts = PreviewOptions {
+        let opts = ApplyOptions {
             dictation,
             ..Default::default()
         };
-        let (_, pv) = nlae_core::recipe::preview_replay(
+        let (plan, steps) = nlae_core::recipe::apply_replay(
             &mut self.project,
             &mut WebEnv,
             &recipe,
@@ -535,7 +503,7 @@ impl WasmProject {
             Some(words),
         )
         .map_err(js_err)?;
-        self.keep_preview(pv)
+        to_js(&serde_json::json!({ "steps": steps, "diff": plan.diff }))
     }
 
     /// The request body for the model (JSON text). The key is not part of it.
@@ -567,9 +535,10 @@ impl WasmProject {
         assistant::record_dictation(&mut self.project, &mut WebEnv, &d).map_err(js_err)
     }
 
-    /// Preview what the model proposed, linked to the exchange it came from
-    /// (and to the spoken request, if it was spoken).
-    pub fn preview_proposal(
+    /// Apply what the model proposed, at once, linked to the exchange it came
+    /// from (and to the spoken request, if it was spoken). Returns the steps as
+    /// recorded.
+    pub fn apply_proposal(
         &mut self,
         proposal: JsValue,
         words: &str,
@@ -580,55 +549,69 @@ impl WasmProject {
     ) -> Result<JsValue, JsValue> {
         let p: Proposal = serde_wasm_bindgen::from_value(proposal).map_err(js_err)?;
         let drafts = p.drafts(&Actor::assistant(model, provider), Origin::Console, words);
-        let opts = PreviewOptions {
+        let opts = ApplyOptions {
             plan: p.plan,
             exchange: Some(exchange.to_string()),
             dictation,
             ..Default::default()
         };
-        let pv = self
+        let applied = self
             .project
-            .preview(&mut WebEnv, drafts, opts)
+            .apply(&mut WebEnv, drafts, opts)
             .map_err(js_err)?;
-        self.keep_preview(pv)
+        to_js(&serde_json::json!({ "steps": applied }))
     }
 
-    /// Accept a preview. `overrides` maps a step's index to changed parameters
-    /// (recorded as a modification); `disabled` lists plan steps switched off.
-    pub fn accept(
-        &mut self,
-        preview_id: &str,
-        overrides: JsValue,
-        disabled: JsValue,
-        note: Option<String>,
-    ) -> Result<(), JsValue> {
-        let raw: BTreeMap<String, Value> =
-            serde_wasm_bindgen::from_value(overrides).map_err(js_err)?;
-        let mut changes = BTreeMap::new();
-        for (k, v) in raw {
-            let i: usize = k.parse().map_err(js_err)?;
-            changes.insert(i, v);
-        }
-        let disabled: Vec<usize> = serde_wasm_bindgen::from_value(disabled).map_err(js_err)?;
-        let opts = AcceptOptions {
-            note,
-            overrides: changes,
-            disabled,
-            actor: None,
-        };
+    /// Exclude steps: they keep their places and can be restored; the steps
+    /// above keep their values. `reason` is recorded.
+    pub fn exclude(&mut self, ids: JsValue, reason: Option<String>) -> Result<(), JsValue> {
+        let ids: Vec<String> = serde_wasm_bindgen::from_value(ids).map_err(js_err)?;
         self.project
-            .accept(&mut WebEnv, preview_id, opts)
+            .exclude(&mut WebEnv, &ids, reason, None)
             .map_err(js_err)?;
-        self.preview = None;
         Ok(())
     }
 
-    pub fn reject(&mut self, preview_id: &str, reason: Option<String>) -> Result<(), JsValue> {
+    /// Bring excluded steps back to their places, with the values they had.
+    pub fn restore(&mut self, ids: JsValue) -> Result<(), JsValue> {
+        let ids: Vec<String> = serde_wasm_bindgen::from_value(ids).map_err(js_err)?;
         self.project
-            .reject(&mut WebEnv, preview_id, reason, None)
+            .restore(&mut WebEnv, &ids, None)
             .map_err(js_err)?;
-        self.preview = None;
         Ok(())
+    }
+
+    /// Change a step's parameters (`changes`: the values that change). The step
+    /// is measured again on its input; the steps above keep their values.
+    pub fn edit_step(&mut self, id: &str, changes: JsValue) -> Result<(), JsValue> {
+        let changes: Value = serde_wasm_bindgen::from_value(changes).map_err(js_err)?;
+        self.project
+            .edit(&mut WebEnv, id, &changes, None)
+            .map_err(js_err)?;
+        Ok(())
+    }
+
+    /// What measuring a step again would change. Nothing is changed or logged.
+    pub fn remeasure_diff(&mut self, id: &str) -> Result<JsValue, JsValue> {
+        to_js(&self.project.remeasure_diff(id).map_err(js_err)?)
+    }
+
+    /// Measure a step again on the audio below it now.
+    pub fn remeasure(&mut self, id: &str) -> Result<(), JsValue> {
+        self.project
+            .remeasure(&mut WebEnv, id, None)
+            .map_err(js_err)?;
+        Ok(())
+    }
+
+    /// Take back the last change to the stack; returns the change.
+    pub fn undo(&mut self) -> Result<JsValue, JsValue> {
+        to_js(&self.project.undo(&mut WebEnv, None).map_err(js_err)?)
+    }
+
+    /// Repeat the last change taken back; returns the change.
+    pub fn redo(&mut self) -> Result<JsValue, JsValue> {
+        to_js(&self.project.redo(&mut WebEnv, None).map_err(js_err)?)
     }
 
     /// Rate the stack as it stands (1–5), with an optional note.
@@ -652,12 +635,6 @@ impl WasmProject {
                 .edit_layout()
                 .map_json(self.project.source.sample_rate),
         )
-    }
-
-    /// Remove the top step (it stays in the log).
-    pub fn remove_top(&mut self) -> Result<(), JsValue> {
-        self.project.remove_top(&mut WebEnv, None).map_err(js_err)?;
-        Ok(())
     }
 
     /// The stack rendered with the final limiter, as a WAV file (`f32`,
