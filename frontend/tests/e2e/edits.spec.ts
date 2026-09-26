@@ -35,12 +35,8 @@ test("a selected stretch is removed and silence inserted; playback skips the rem
 
   await page.getByTestId("remove-stretch").click();
   const turn = page.getByTestId("turn").first();
-  await expect(turn.getByTestId("proposal-step")).toHaveAttribute("data-op", "remove_time");
-  // Previewed on the original's timeline, the stretch marked where it is.
-  await expect.poll(async () => (await nlae(page)).view.monitor).toBe("preview:before");
-  await expect(page.getByTestId("edit-proposed")).toBeVisible();
-  await turn.getByTestId("accept").click();
-  await expect(turn.getByTestId("turn-outcome")).toHaveText("accepted");
+  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "remove_time");
+  // Applied at once: the lanes keep the original's timeline, the stretch marked where it was.
   await expect(page.getByTestId("edit-removed")).toBeVisible();
   const removed = sel.t1 - sel.t0;
   await expect.poll(async () => (await editMap(page)).editMap?.duration_s).toBeCloseTo(12 - removed, 3);
@@ -60,9 +56,7 @@ test("a selected stretch is removed and silence inserted; playback skips the rem
   await page.getByTestId("insert-length").fill("0.5");
   await page.getByTestId("insert-silence").click();
   const second = page.getByTestId("turn").nth(1);
-  await expect(second.getByTestId("proposal-step")).toHaveAttribute("data-op", "insert_silence");
-  await second.getByTestId("accept").click();
-  await expect(second.getByTestId("turn-outcome")).toHaveText("accepted");
+  await expect(second.getByTestId("applied-step")).toHaveAttribute("data-op", "insert_silence");
   await expect(page.getByTestId("edit-inserted")).toBeVisible();
   await expect(page.getByTestId("output-length")).toContainText(`Output ${(12 - removed + 0.5).toFixed(3)} s (original 12.000 s)`);
 

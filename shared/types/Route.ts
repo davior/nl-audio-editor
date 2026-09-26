@@ -4,4 +4,4 @@ import type { RoutedStep } from "./RoutedStep";
 /**
  * How a request is handled.
  */
-export type Route = { "route": "recipe", name: string, } | { "route": "steps", steps: Array<RoutedStep>, } | { "route": "listen", which: string, } | { "route": "undo" } | { "route": "model" };
+export type Route = { "route": "recipe", name: string, } | { "route": "steps", steps: Array<RoutedStep>, } | { "route": "listen", which: string, } | { "route": "undo" } | { "route": "redo" } | { "route": "model" };

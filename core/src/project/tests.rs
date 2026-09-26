@@ -1264,3 +1264,44 @@ fn a_clone_edits_and_undoes_what_it_inherited() {
     let (_, report) = Project::open(c2.store.clone(), app()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
+
+#[test]
+fn one_step_can_be_heard_before_and_after_and_what_it_removed() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    apply_one(&mut p, &mut env, draft("dc_remove", json!({}), Scope::Clip));
+    let cut = apply_one(
+        &mut p,
+        &mut env,
+        draft(
+            "band_cut",
+            json!({"f_lo": 740, "f_hi": 760, "depth_db": 14}),
+            Scope::Clip,
+        ),
+    );
+    apply_one(&mut p, &mut env, draft("normalise", json!({}), Scope::Clip));
+    let steps = p.render_steps();
+    let full = |n: usize| {
+        crate::engine::render_full(&p.source, &steps[..n])
+            .unwrap()
+            .audio
+    };
+    let (before, after) = (full(1), full(2));
+    assert_eq!(p.step_audio(&cut.step_id, "before").unwrap(), &before);
+    assert_eq!(p.step_audio(&cut.step_id, "after").unwrap(), &after);
+    let removed = crate::engine::difference(&before, &after);
+    assert_eq!(p.step_audio(&cut.step_id, "removed").unwrap(), &removed);
+    assert_eq!(
+        Some(p.step_audio(&cut.step_id, "after").unwrap().render_hash()),
+        cut.output_hash
+    );
+    // The first step's "before" is the recording itself.
+    let first = p.state().steps[0].step_id.clone();
+    let source = p.source.clone();
+    assert_eq!(p.step_audio(&first, "before").unwrap(), &source);
+    // Only active steps, and only these parts.
+    assert!(p.step_audio(&cut.step_id, "sideways").is_err());
+    p.exclude(&mut env, std::slice::from_ref(&cut.step_id), None, None)
+        .unwrap();
+    assert!(p.step_audio(&cut.step_id, "after").is_err());
+}

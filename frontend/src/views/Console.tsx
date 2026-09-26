@@ -1,22 +1,18 @@
 // The console: say what you want, typed or spoken. Routine requests are
 // handled locally; the rest go to the chosen model with words and analysis
-// numbers only. Every proposal is previewed on a short window and waits for
-// Accept or Reject; values can be changed first (recorded as a modification).
-// Spoken words fill the box as they are recognised and are sent, like typed
-// ones, with Enter; what was heard is logged next to what was sent.
+// numbers only. A request applies at once, to the whole recording; the stack
+// is where it is reviewed: any step can be removed, restored or changed, and
+// undone or redone. Spoken words fill the box as they are recognised and are
+// sent, like typed ones, with Enter; what was heard is logged next to what
+// was sent.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compose, Listening, loadSpeechConfig, SPEECH_PROVIDER, type Listened } from "../assistant/dictation";
 import { complete, loadConfig, type ProviderConfig } from "../assistant/provider";
 import { core } from "../core/client";
-import type { PreviewRecord, PreviewResult, ProjectSummary, Segment, Selection, Step, Turn, Which } from "../core/types";
+import type { AppliedResult, ProjectSummary, Segment, Selection, Step, Turn, Which } from "../core/types";
 import { debug } from "../debug";
 import { Settings } from "./Settings";
-import { describe } from "./StackPanel";
-
-export interface PreviewInfo {
-  record: PreviewRecord;
-  window: [number, number];
-}
+import { changeWords, describe, stepOf } from "./StackPanel";
 
 interface ConsoleTurn {
   id: number;
@@ -24,10 +20,11 @@ interface ConsoleTurn {
   via: "local" | "model" | null;
   /** The model asked, when one was. */
   model?: string;
-  status: "working" | "proposal" | "reply" | "done" | "error";
+  status: "working" | "applied" | "reply" | "done" | "error";
   text?: string;
   problems?: string[];
-  preview?: PreviewRecord;
+  /** The steps the request applied, as recorded. */
+  applied?: Step[];
   outcome?: string;
   /** The words were dictated (possibly changed before sending). */
   spoken?: boolean;
@@ -57,8 +54,8 @@ interface Props {
   unavailable: string | null;
   onSummary: (s: ProjectSummary) => void;
   onListen: (which: Which) => void;
-  /** A preview opened, or closed (`accepted` when it went onto the stack). */
-  onPreview: (p: PreviewInfo | null, accepted?: boolean) => void;
+  /** Select a step in the stack (to change its values, or listen to it). */
+  onSelectStep: (id: string) => void;
   onError: (e: unknown) => void;
   save: () => Promise<void>;
   /** A request made with a button elsewhere; handled as if typed (each new `n` once). */
@@ -66,12 +63,6 @@ interface Props {
   /** The microphone opened (true) or closed: playback pauses meanwhile, so no recording is streamed. */
   onDictating: (on: boolean) => void;
 }
-
-type Descriptor = {
-  id: string;
-  version: number;
-  params: { id: string; title: string; type: string; min?: number; max?: number; step?: number; values?: string[]; unit?: string }[];
-};
 
 function scopeWords(s: Step["scope"]): string {
   switch (s.kind) {
@@ -94,143 +85,87 @@ function measurementText(m: Record<string, unknown>): string {
     .join(" · ");
 }
 
-/** A value editor for one parameter; numbers, choices and switches only. */
-function ParamInput({ spec, value, onChange }: { spec: Descriptor["params"][number]; value: unknown; onChange: (v: unknown) => void }) {
-  if (spec.type === "number" || spec.type === "integer") {
-    if (typeof value !== "number") return <span className="muted">{String(value)}</span>;
-    return (
-      <input
-        type="number"
-        value={value}
-        min={spec.min}
-        max={spec.max}
-        step={spec.step ?? (spec.type === "integer" ? 1 : 0.1)}
-        onChange={(e) => onChange(Number(e.target.value))}
-        data-testid={`param-${spec.id}`}
-      />
-    );
-  }
-  if (spec.type === "enum")
-    return (
-      <select value={String(value)} onChange={(e) => onChange(e.target.value)} data-testid={`param-${spec.id}`}>
-        {spec.values?.map((v) => (
-          <option key={v}>{v}</option>
-        ))}
-      </select>
-    );
-  if (spec.type === "bool")
-    return <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} data-testid={`param-${spec.id}`} />;
-  return <span className="muted">{JSON.stringify(value).slice(0, 40)}</span>;
-}
-
-function ProposalCard({
+/** What a request applied: each step, measured over the whole recording. */
+function AppliedCard({
   turn,
-  descriptors,
+  state,
   busy,
-  onAccept,
-  onReject,
+  onUndo,
+  onSelectStep,
 }: {
   turn: ConsoleTurn;
-  descriptors: Descriptor[];
+  state: ProjectSummary["state"];
   busy: boolean;
-  onAccept: (overrides: Record<number, Record<string, unknown>>, disabled: number[]) => void;
-  onReject: (reason: string) => void;
+  onUndo: () => void;
+  onSelectStep: (id: string) => void;
 }) {
-  const pv = turn.preview!;
-  const [editing, setEditing] = useState<number | null>(null);
-  const [overrides, setOverrides] = useState<Record<number, Record<string, unknown>>>({});
-  const [off, setOff] = useState<number[]>([]);
-  const [reason, setReason] = useState("");
-  const [rejecting, setRejecting] = useState(false);
+  const steps = turn.applied!;
+  const ids = steps.map((s) => s.step_id);
+  // Undo here while this is still the last change to the stack.
+  const last = state.undo[state.undo.length - 1];
+  const isLast = !!last && last.kind === "applied" && last.step_ids.length === ids.length && ids.every((id) => last.step_ids.includes(id));
   return (
-    <div className="proposal" data-testid="proposal">
-      {pv.steps.map((s, i) => {
-        const desc = descriptors.find((d) => d.id === s.op && d.version === s.op_version);
-        const changed = overrides[i] ?? {};
+    <div className="proposal applied" data-testid="applied">
+      {steps.map((s) => {
+        const entry = state.entries.find((e) => e.step_id === s.step_id);
+        const now = stepOf(state, s.step_id) ?? s;
         return (
-          <div key={s.step_id} className={`proposal-step ${off.includes(i) ? "off" : ""}`} data-testid="proposal-step" data-op={s.op}>
+          <div
+            key={s.step_id}
+            className={`proposal-step ${entry?.active === false ? "off" : ""}`}
+            data-testid="applied-step"
+            data-op={s.op}
+          >
             <div className="step-top">
-              {pv.kind === "plan" && (
-                <input
-                  type="checkbox"
-                  checked={!off.includes(i)}
-                  onChange={(e) => setOff((o) => (e.target.checked ? o.filter((x) => x !== i) : [...o, i]))}
-                  title="Include this step"
-                  data-testid="plan-step-toggle"
-                />
-              )}
               <span className="op">{s.op}</span>
               <span className="label">{scopeWords(s.scope)}</span>
-              {desc && (
-                <button className="small" onClick={() => setEditing(editing === i ? null : i)} data-testid="modify">
-                  {editing === i ? "done" : "change"}
+              {entry?.active === false ? (
+                <span className="tag">removed</span>
+              ) : (
+                <button
+                  className="small"
+                  onClick={() => onSelectStep(s.step_id)}
+                  data-testid="edit-applied"
+                  title="Change its values in the stack"
+                >
+                  change
                 </button>
               )}
             </div>
-            <div className="step-desc">{describe(s)}</div>
-            {Object.keys(changed).length > 0 && (
-              <div className="step-meta" data-testid="changed">
-                changed:{" "}
-                {Object.entries(changed)
-                  .map(([k, v]) => `${k} → ${String(v)}`)
-                  .join(", ")}
-              </div>
-            )}
+            <div className="step-desc">{describe(now)}</div>
             <div className="step-meta" data-testid="measurements">
-              {measurementText(s.measurements as Record<string, unknown>)}
+              {measurementText(now.measurements as Record<string, unknown>)}
             </div>
-            {editing === i && desc && (
-              <div className="param-editor">
-                {desc.params
-                  .filter((p) => ["number", "integer", "enum", "bool"].includes(p.type))
-                  .map((p) => (
-                    <label key={p.id}>
-                      {p.title}
-                      {p.unit ? ` (${p.unit})` : ""}
-                      <ParamInput
-                        spec={p}
-                        value={p.id in changed ? changed[p.id] : (s.params as Record<string, unknown>)[p.id]}
-                        onChange={(v) => setOverrides((o) => ({ ...o, [i]: { ...(o[i] ?? {}), [p.id]: v } }))}
-                      />
-                    </label>
-                  ))}
-              </div>
-            )}
           </div>
         );
       })}
-      <div className="proposal-actions">
-        <button className="accept" disabled={busy} onClick={() => onAccept(overrides, off)} data-testid="accept">
-          Accept
-        </button>
-        {!rejecting ? (
-          <button disabled={busy} onClick={() => setRejecting(true)} data-testid="reject">
-            Reject
+      {isLast && (
+        <div className="editor-actions">
+          <button disabled={busy} onClick={onUndo} data-testid="undo-applied" title="Take it off the stack (it stays in the log)">
+            Undo
           </button>
-        ) : (
-          <>
-            <input
-              placeholder="Why? (optional, recorded)"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              data-testid="reject-reason"
-            />
-            <button disabled={busy} onClick={() => onReject(reason)} data-testid="reject-confirm">
-              Reject
-            </button>
-          </>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
-export function Console({ summary, selection, unavailable, onSummary, onListen, onPreview, onError, save, request, onDictating }: Props) {
+export function Console({
+  summary,
+  selection,
+  unavailable,
+  onSummary,
+  onListen,
+  onSelectStep,
+  onError,
+  save,
+  request,
+  onDictating,
+}: Props) {
   const id = summary.id;
   const [turns, setTurns] = useState<ConsoleTurn[]>([]);
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
-  const [descriptors, setDescriptors] = useState<Descriptor[]>([]);
   const next = useRef(1);
   const turnsEl = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -248,10 +183,6 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
   const micTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const inputEl = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    core.descriptors().then((d) => setDescriptors(d as Descriptor[]), onError);
-  }, [onError]);
-
   useEffect(
     () =>
       debug(
@@ -261,7 +192,7 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     [turns],
   );
 
-  // The latest turn, with its Accept and Reject, stays in view.
+  // The latest turn stays in view.
   useEffect(() => {
     const el = turnsEl.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -273,11 +204,20 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     .filter((t) => t.status !== "working")
     .flatMap((t) => [{ role: "user", text: t.words }, ...(t.text ? [{ role: "assistant", text: t.text }] : [])]);
 
-  const showPreview = async (tid: number, r: PreviewResult, via: "local" | "model", text?: string) => {
+  const showApplied = async (tid: number, r: AppliedResult, via: "local" | "model", text?: string) => {
     await save();
     onSummary(r.summary);
-    update(tid, { status: "proposal", preview: r.record, via, text });
-    onPreview({ record: r.record, window: r.window });
+    update(tid, { status: "applied", applied: r.steps, via, text });
+    onListen("stack");
+  };
+
+  /** Take back the last change to the stack, or repeat the last one taken back. */
+  const undoOrRedo = async (which: "undo" | "redo"): Promise<string> => {
+    const r = which === "undo" ? await core.undo(id) : await core.redo(id);
+    await save();
+    onSummary(r.summary);
+    const words = changeWords(r.summary.state, r.change);
+    return which === "undo" ? `Undid ${words} (it stays in the log).` : `Redid ${words}.`;
   };
 
   const clearMicTimers = () => {
@@ -413,7 +353,6 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     const w = (text ?? words).trim();
     if (!w || busy) return;
     const tid = next.current++;
-    const open = turns.some((t) => t.status === "proposal");
     // Words from the box may have been dictated; a request made with a button was not.
     const dictated = text === undefined ? spoken.current : null;
     if (text === undefined) spoken.current = null;
@@ -438,11 +377,6 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
         await save();
       }
       const route = await core.route(w, selection);
-      if (open && route.route !== "listen") {
-        // Anything but listening sets an open proposal aside (it stays in the log, undecided).
-        onPreview(null);
-        setTurns((ts) => ts.map((t) => (t.status === "proposal" ? { ...t, status: "done", outcome: "set aside" } : t)));
-      }
       if (route.route === "listen") {
         onListen(route.which as Which);
         update(tid, {
@@ -450,22 +384,19 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
           status: "done",
           text: `Listening to ${route.which === "stack" ? "the processed audio" : route.which === "source" ? "the original" : "what was removed"}.`,
         });
-      } else if (route.route === "undo") {
-        const s = await core.removeTop(id);
-        await save();
-        onSummary(s);
-        update(tid, { via: "local", status: "done", text: "Removed the last step (it stays in the log)." });
+      } else if (route.route === "undo" || route.route === "redo") {
+        update(tid, { via: "local", status: "done", text: await undoOrRedo(route.route) });
       } else if (route.route === "recipe") {
-        await showPreview(
+        await showApplied(
           tid,
-          await core.previewRecipe(id, route.name, w, dictation),
+          await core.applyRecipe(id, route.name, w, dictation),
           "local",
           `The built-in ${route.name} recipe, measured on this recording.`,
         );
       } else if (route.route === "steps") {
-        await showPreview(
+        await showApplied(
           tid,
-          await core.previewRouted(id, route.steps, w, dictation),
+          await core.applyRouted(id, route.steps, w, dictation),
           "local",
           route.steps.map((s) => s.understood).join(" "),
         );
@@ -510,9 +441,9 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
             await save();
             update(tid, { status: "reply", text: next.proposal.text ?? "" });
           } else {
-            await showPreview(
+            await showApplied(
               tid,
-              await core.previewProposal(id, next.proposal, w, config.model, config.provider, exchange, dictation),
+              await core.applyProposal(id, next.proposal, w, config.model, config.provider, exchange, dictation),
               "model",
               next.proposal.text ?? undefined,
             );
@@ -533,14 +464,10 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
     if (request) void askRef.current(request.words);
   }, [request]);
 
-  const decide = async (tid: number, f: () => Promise<ProjectSummary>, outcome: string) => {
+  const undoHere = async () => {
     setBusy(true);
     try {
-      const s = await f();
-      await save();
-      onSummary(s);
-      onPreview(null, outcome.startsWith("accepted"));
-      update(tid, { status: "done", outcome });
+      await undoOrRedo("undo");
     } catch (e) {
       onError(e);
     } finally {
@@ -592,20 +519,8 @@ export function Console({ summary, selection, unavailable, onSummary, onListen, 
                 ))}
               </ul>
             )}
-            {t.status === "proposal" && t.preview && (
-              <ProposalCard
-                turn={t}
-                descriptors={descriptors}
-                busy={busy}
-                onAccept={(overrides, disabled) =>
-                  decide(
-                    t.id,
-                    () => core.accept(id, t.preview!.preview_id, overrides, disabled),
-                    disabled.length ? "accepted (some steps off)" : "accepted",
-                  )
-                }
-                onReject={(reason) => decide(t.id, () => core.reject(id, t.preview!.preview_id, reason), "rejected")}
-              />
+            {t.status === "applied" && t.applied && (
+              <AppliedCard turn={t} state={summary.state} busy={busy} onUndo={undoHere} onSelectStep={onSelectStep} />
             )}
             {t.outcome && (
               <div className="outcome" data-testid="turn-outcome">

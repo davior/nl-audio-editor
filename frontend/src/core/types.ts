@@ -7,6 +7,9 @@ export type { Manifest, OpenReport, StackState };
 export type { Step } from "../../../shared/types/Step";
 export type { Scope } from "../../../shared/types/Scope";
 export type { PreviewRecord } from "../../../shared/types/PreviewRecord";
+export type { StackChange } from "../../../shared/types/StackChange";
+export type { StackEntry } from "../../../shared/types/StackEntry";
+export type { DiffEntry } from "../../../shared/types/DiffEntry";
 export type { Route } from "../../../shared/types/Route";
 export type { RoutedStep } from "../../../shared/types/RoutedStep";
 export type { Selection } from "../../../shared/types/Selection";
@@ -38,15 +41,10 @@ export interface ProjectSummary {
   needsAnalysis: boolean;
 }
 
-export type Which =
-  | "source"
-  | "stack"
-  | "output"
-  | "residual"
-  | "preview:original"
-  | "preview:before"
-  | "preview:output"
-  | "preview:residual";
+/** One step on its own, over the whole recording. */
+export type StepPart = "before" | "after" | "removed";
+
+export type Which = "source" | "stack" | "output" | "residual" | `step:${string}:${StepPart}`;
 
 /** A piece of the output: original audio, or inserted silence (seconds). */
 export type EditPiece =
@@ -86,9 +84,9 @@ export interface ViewState {
   tfSelection: { t0: number; t1: number; f_lo: number; f_hi: number } | null;
 }
 
-/** A preview the core has open: its record and window (seconds). */
-export interface PreviewResult {
-  record: import("../../../shared/types/PreviewRecord").PreviewRecord;
-  window: [number, number];
+/** Steps applied at once, as recorded; the dry-run diff of a replayed recipe; the project after. */
+export interface AppliedResult {
+  steps: import("../../../shared/types/Step").Step[];
+  diff?: import("../../../shared/types/DiffEntry").DiffEntry[];
   summary: ProjectSummary;
 }

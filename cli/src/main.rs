@@ -440,6 +440,11 @@ fn ask(a: &AskArgs) -> Res<()> {
             println!("Undid {} (it stays in the log).", change_words(&p, &c));
             Ok(())
         }
+        Route::Redo => {
+            let c = p.redo(&mut e, None).map_err(|e| e.to_string())?;
+            println!("Redid {}.", change_words(&p, &c));
+            Ok(())
+        }
         Route::Listen { which } => {
             println!(
                 "Nothing to change. To hear it: nlae spectrogram {} --what {which}, or nlae render.",

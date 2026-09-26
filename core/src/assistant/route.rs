@@ -49,8 +49,10 @@ pub enum Route {
     Steps { steps: Vec<RoutedStep> },
     /// Switch what is heard and drawn: `source`, `stack` or `residual`.
     Listen { which: String },
-    /// Remove the top step (the history is kept).
+    /// Take back the last change to the stack (the history is kept).
     Undo,
+    /// Repeat the last change taken back.
+    Redo,
     /// Needs the model.
     Model,
 }
@@ -718,6 +720,9 @@ pub fn route(words: &str, selection: Option<&Selection>) -> Route {
     {
         return Route::Undo;
     }
+    if t == "redo" || t.starts_with("redo ") {
+        return Route::Redo;
+    }
 
     if let Some(r) = catalogue(&t, &nums, &freqs, &dbs, span.clone()) {
         return r;
@@ -951,6 +956,8 @@ mod tests {
         }
         assert_eq!(route("undo", None), Route::Undo);
         assert_eq!(route("remove the last step", None), Route::Undo);
+        assert_eq!(route("redo", None), Route::Redo);
+        assert_eq!(route("redo that", None), Route::Redo);
         assert_eq!(
             route("play what was removed", None),
             Route::Listen {
@@ -1139,6 +1146,7 @@ mod tests {
         assert_eq!(r("Remove the 750 hertz line.").op, "line_reduce");
         assert_eq!(r("Turn it up by 3 dB.").params, json!({"gain_db": 3.0}));
         assert_eq!(route("Undo.", None), Route::Undo);
+        assert_eq!(route("Redo.", None), Route::Redo);
         assert_eq!(
             route("Clean this recording up.", None),
             Route::Recipe {

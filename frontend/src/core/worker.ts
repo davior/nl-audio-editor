@@ -5,13 +5,13 @@ import * as Comlink from "comlink";
 import init, { WasmProject, parity, descriptors, route, next_round, listen_params } from "../core-wasm/nlae.js";
 import wasmUrl from "../core-wasm/nlae_bg.wasm?url";
 import type {
+  AppliedResult,
+  DiffEntry,
   Dictation,
   EditMap,
   Exchange,
   NextRound,
   Pcm,
-  PreviewRecord,
-  PreviewResult,
   ProjectSummary,
   Proposal,
   Rounds,
@@ -19,6 +19,8 @@ import type {
   RoutedStep,
   Selection,
   SpectrogramReq,
+  StackChange,
+  Step,
   Turn,
   Which,
 } from "./types";
@@ -146,14 +148,16 @@ const api = {
   async recordDictation(id: string, dictation: Dictation): Promise<string> {
     return get(id).record_dictation(dictation);
   },
-  async previewRouted(id: string, steps: RoutedStep[], words: string, dictation?: string): Promise<PreviewResult> {
+  /** Apply the router's steps at once; returns them as recorded, and the project. */
+  async applyRouted(id: string, steps: RoutedStep[], words: string, dictation?: string): Promise<AppliedResult> {
     const p = get(id);
-    const r = p.preview_routed(steps, words, dictation) as { record: PreviewRecord; window: [number, number] };
+    const r = p.apply_routed(steps, words, dictation) as { steps: Step[] };
     return { ...r, summary: summary(p) };
   },
-  async previewRecipe(id: string, name: string, words: string, dictation?: string): Promise<PreviewResult> {
+  /** Replay a built-in recipe as one plan, applied at once (with its dry-run diff). */
+  async applyRecipe(id: string, name: string, words: string, dictation?: string): Promise<AppliedResult> {
     const p = get(id);
-    const r = p.preview_recipe(name, words, dictation) as { record: PreviewRecord; window: [number, number] };
+    const r = p.apply_recipe(name, words, dictation) as { steps: Step[]; diff: DiffEntry[] };
     return { ...r, summary: summary(p) };
   },
   async assistantRequest(id: string, model: string, history: Turn[], words: string, selection: Selection | null): Promise<string> {
@@ -162,7 +166,8 @@ const api = {
   async recordExchange(id: string, exchange: Exchange): Promise<string> {
     return get(id).record_exchange(exchange);
   },
-  async previewProposal(
+  /** Apply what the model proposed at once, linked to the exchange it came from. */
+  async applyProposal(
     id: string,
     proposal: Proposal,
     words: string,
@@ -170,34 +175,48 @@ const api = {
     provider: string,
     exchange: string,
     dictation?: string,
-  ): Promise<PreviewResult> {
+  ): Promise<AppliedResult> {
     const p = get(id);
-    const r = p.preview_proposal(proposal, words, model, provider, exchange, dictation) as {
-      record: PreviewRecord;
-      window: [number, number];
-    };
+    const r = p.apply_proposal(proposal, words, model, provider, exchange, dictation) as { steps: Step[] };
     return { ...r, summary: summary(p) };
   },
-  async accept(
-    id: string,
-    previewId: string,
-    overrides: Record<number, Record<string, unknown>>,
-    disabled: number[],
-    note?: string,
-  ): Promise<ProjectSummary> {
+  /** Exclude steps: they keep their places and can be restored. */
+  async exclude(id: string, ids: string[], reason?: string): Promise<ProjectSummary> {
     const p = get(id);
-    p.accept(previewId, overrides, disabled, note);
+    p.exclude(ids, reason || undefined);
     return summary(p);
   },
-  async reject(id: string, previewId: string, reason?: string): Promise<ProjectSummary> {
+  async restore(id: string, ids: string[]): Promise<ProjectSummary> {
     const p = get(id);
-    p.reject(previewId, reason || undefined);
+    p.restore(ids);
     return summary(p);
   },
-  async removeTop(id: string): Promise<ProjectSummary> {
+  /** Change a step's parameters (only the values that change). */
+  async editStep(id: string, stepId: string, changes: Record<string, unknown>): Promise<ProjectSummary> {
     const p = get(id);
-    p.remove_top();
+    p.edit_step(stepId, changes);
     return summary(p);
+  },
+  /** What measuring a step again would change; nothing is changed. */
+  async remeasureDiff(id: string, stepId: string): Promise<DiffEntry[]> {
+    return get(id).remeasure_diff(stepId) as DiffEntry[];
+  },
+  async remeasure(id: string, stepId: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.remeasure(stepId);
+    return summary(p);
+  },
+  /** Take back the last change to the stack. */
+  async undo(id: string): Promise<{ change: StackChange; summary: ProjectSummary }> {
+    const p = get(id);
+    const change = p.undo() as StackChange;
+    return { change, summary: summary(p) };
+  },
+  /** Repeat the last change taken back. */
+  async redo(id: string): Promise<{ change: StackChange; summary: ProjectSummary }> {
+    const p = get(id);
+    const change = p.redo() as StackChange;
+    return { change, summary: summary(p) };
   },
   async editMap(id: string): Promise<EditMap> {
     return get(id).edit_map() as EditMap;

@@ -73,6 +73,9 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **A step whose input is unchanged is not rendered again when the stack changes** — determinism makes its output identical, so removing a time edit, or a step that changed nothing, costs almost nothing.
 - **Recorded-again steps drop their inferred bindings and infer them on the new input; declared ones are kept** — inference lets a step's existing bindings win, so stale inferred ones would otherwise stick.
 - **The render cache is bounded by size, least recently used first** — every change adds renders, and a 10-minute stereo render is about 230 MB; the current stack's render is kept.
+- **The browser applies each request at once; its preview mode is gone** — the product owner's choice (Q4); the review happens in the stack, and the core keeps preview and accept for the command line.
+- **A step's own monitors (before it, after it, what it removed) cover the whole recording, and are never saved as the view** — they replace the preview's window A/B for any step, not only the newest; a saved one could name a step that is no longer on the stack.
+- **"redo" is routed only as "redo" or "redo …"** — "put that back" means undo after a removal and redo after an undo, so it is left to the model.
 - **Drift is recorded as `resolved_on`, only when it differs from the step's input** — steps that never drifted are unchanged in the log, and a step that is measured again, or whose input comes back, loses it.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 

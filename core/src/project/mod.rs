@@ -836,6 +836,50 @@ impl<S: Store> Project<S> {
         }
     }
 
+    /// One active step on its own, over the whole recording: the audio
+    /// `before` it (the active steps below it), `after` it, or what it
+    /// `removed` (before − after). Cached like the stack's renders.
+    pub fn step_audio(&mut self, id: &str, part: &str) -> Result<&AudioBuffer> {
+        let i = self
+            .state
+            .steps
+            .iter()
+            .position(|s| s.step_id == id)
+            .ok_or_else(|| ProjectError::Invalid(format!("no active step `{id}`")))?;
+        let steps: Vec<RenderStep> = self.state.steps[..=i]
+            .iter()
+            .map(Step::render_step)
+            .collect();
+        let key = match part {
+            "before" => step::stack_hash(&self.manifest.source.sha256, &steps[..i]),
+            "after" => step::stack_hash(&self.manifest.source.sha256, &steps),
+            "removed" => format!(
+                "removed:{}",
+                step::stack_hash(&self.manifest.source.sha256, &steps)
+            ),
+            p => return invalid(format!("unknown part `{p}` (before | after | removed)")),
+        };
+        if !self.renders.contains(&key) {
+            match part {
+                "before" => {
+                    self.render_prefix(&steps[..i])?;
+                }
+                "after" => {
+                    self.render_prefix(&steps)?;
+                }
+                _ => {
+                    let (before, _) = self.render_prefix(&steps[..i])?;
+                    let (after, _) = self.render_prefix(&steps)?;
+                    let removed = engine::difference(&before, &after);
+                    let keep = self.state.stack_hash.clone();
+                    self.renders
+                        .insert(key.clone(), Arc::new(removed), Map::new(), &keep);
+                }
+            }
+        }
+        Ok(self.renders.audio(&key).expect("just rendered"))
+    }
+
     /// What the stack removed, level-matched: the source passed through the
     /// stack's level steps only (DC removal, gain, normalise, compressor) minus
     /// the stack's output. With no attenuating steps it is silence; otherwise it
