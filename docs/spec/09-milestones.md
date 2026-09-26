@@ -35,8 +35,10 @@ from M2, because the reference workflow needs them.
   - the steps above a change keep their values, and a step measured on audio that has since
     changed is flagged, to be measured again if the user wants.
 
-  Built in the core, the command line and the dataset export; the browser follows. It brings
-  forward M2's generated panels (the step editor).
+  Built in the core, the command line, the dataset export and the browser: the console applies
+  at once; the stack panel removes, restores, undoes and redoes; the step editor changes a
+  step's values and measures it again; the monitor plays one step on its own. It brings forward M2's generated panels (the step
+  editor).
 - M2 has begun with the catalogue (chosen by the product owner, 2026-09-25):
   - eight operations: `high_pass`, `low_pass`, `bell`, `shelf` and `tilt` (zero-phase EQ on
     the shared engine, which may now boost), `gate`, `loudness_normalise` (−23 LUFS by

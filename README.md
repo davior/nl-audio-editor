@@ -111,8 +111,16 @@ with `nlae pack`). Projects are kept in the browser's private storage.
 Say what should happen in the console under the lanes: "clean this recording up", "cut 3,100
 to 3,200 Hz by 12 dB", "high-pass at 80 Hz", "boost 3 kHz by 3 dB", "gate the pauses",
 "normalise to −23 LUFS", "dehum", or, with an area selected on the spectrogram, "compress the
-bangs here". Each proposal is previewed on a short window (Original / Before / Processed /
-Residual) and waits for *Accept* or *Reject*.
+bangs here". Each request is applied at once, to the whole recording, and the stack is where
+you review it:
+- click a step's name to change its values, or to hear it on its own (before it, after it, and
+  what it removed);
+- × removes a step: it keeps its place, and *Restore* brings it back;
+- *Undo* and *Redo* walk through the changes;
+- a step measured before a change below it is flagged, and *Measure again* shows what would
+  change.
+
+Exporting approves the stack as it stands.
 
 To speak instead of typing, use *Speak* beside *Send*. The words appear in the box as they are
 recognised, and nothing happens until you press Enter, so you can correct them first.

@@ -57,8 +57,6 @@ applied. A 1–5 rating of the stack as it stands is logged as `stack.rated`.
   removed*, on the whole recording. This replaces cloning to listen at an earlier step.
 - While the steps above a change are rendered again, the panel says how many.
 
-Until the browser has these, *Undo last step* excludes the top step (`step.excluded`).
-
 ## Apply-first editing
 
 Chosen by the product owner, 2026-09-26: a request applies at once, and the stack is where
@@ -74,9 +72,26 @@ changes are reviewed, pruned and tuned. In the browser:
   are excluded.
 - "undo" and "redo" are handled here, without the model.
 
-Status: built in the core and the command line (`nlae ask --apply`, `remove`, `restore`,
-`edit`, `remeasure`, `undo`, `redo`). The browser still previews each request and waits for
-*Accept* until the interface change (M1 below).
+**As built** (in the core, the command line — `nlae ask --apply`, `remove`, `restore`, `edit`,
+`remeasure`, `undo`, `redo` — and the browser):
+- **The console** applies each request at once and shows an *Applied* card. *change* opens the
+  step in the stack; *Undo* is offered while the request is the last change.
+- **The stack panel** lists every step in its place:
+  - × removes a step, with an optional reason; the step stays, greyed and struck through, and
+    *Restore* brings it back;
+  - *Undo* and *Redo* in the panel's head name the change they take back or repeat;
+  - an *edited* tag marks a changed step, and a *measured before a change* badge a drifted one.
+- **The step editor** opens when a step's name is clicked. It is generated from the operation's
+  descriptor, and *Apply* sends only the values that changed. For a drifted step it shows what
+  measuring again would change, and offers *Measure again*.
+- **The monitor**, with a step selected, adds *Before this step*, *After it* and *What it
+  removed*, over the whole recording. Time edits have none (their marks are on the lanes), and
+  these monitors are never saved as the project's view.
+- **Busy:** while the steps above a change are rendered again, the banner says how many.
+- **Approval:** under the stack, a note says that exporting approves it as it stands, and how
+  many steps are removed.
+- **Undo and redo** in words are handled here.
+- **Preview mode is gone from the browser.** The command line keeps preview and accept.
 
 ## Recording
 
@@ -153,6 +168,9 @@ browser and compares it with the pinned hashes.
 view, playhead, what the lanes drew). End-to-end tests read it; nothing reads it back.
 
 ## M1 as built
+
+The browser's preview and *Accept* described here were replaced by apply-first editing
+(2026-09-26, above); the command line keeps them.
 
 **Console.** A panel under the lanes. Say what should happen, in words, typed or spoken.
 - Each turn shows whether it was handled here or which model answered it, and whether it was
