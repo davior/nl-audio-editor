@@ -154,7 +154,13 @@ nlae ask case "remove 2 to 3 seconds"      # time edits apply to the output; the
 nlae ask case "high-pass at 80 Hz" --out hp.wav   # preview to a file (--residual r.wav: what was removed)
 nlae plan case --recipe builtin:spoken-word-cleanup --out p.wav --residual r.wav
 nlae accept case <preview-id>              # commit a preview (ids are printed by `ask` and `plan`)
-nlae stack case                            # the stack, with what each step measured
+nlae ask case "high-pass at 80 Hz" --apply # or apply at once, to the whole recording (`plan --apply` too)
+nlae stack case                            # the stack, numbered; removed steps stay in their places
+nlae remove case 2 --reason "too much"     # take step 2 out; the steps above keep their values
+nlae restore case <step-id>                # bring a removed step back to its place
+nlae edit case 3 cutoff_hz=120             # change a step's values; it is measured again on its input
+nlae remeasure case 4 --dry-run            # a step measured before a change below it: what would change
+nlae undo case                             # take back the last change to the stack (`nlae redo` repeats it)
 nlae clone case --at <step-id> -o case-b   # follow another stream of editing
 nlae render case -o cleaned.wav            # the stack, with the final limiter
 nlae pack case -o case.nlae                # a portable bundle; `nlae verify case.nlae` checks it

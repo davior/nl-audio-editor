@@ -80,6 +80,7 @@ fn record_preview_accept_replay_export() {
         &["save-recipe", "case", "-o", "r.json", "--name", "mine"],
         &dir,
     );
+    // On the same recording, measuring again finds the same values.
     let out = nlae(
         &[
             "replay",
@@ -91,7 +92,27 @@ fn record_preview_accept_replay_export() {
         ],
         &dir,
     );
-    assert!(out.contains("measured on this clip"));
+    assert!(out.contains("(no values change)"), "{out}");
+    // On a quieter copy, the level-dependent values are measured anew.
+    let mut quiet = clip.mix.clone();
+    for ch in quiet.channels.iter_mut() {
+        for x in ch.iter_mut() {
+            *x *= 0.5;
+        }
+    }
+    std::fs::write(dir.join("quiet.wav"), write_wav(&quiet, WavFormat::F32)).unwrap();
+    let out = nlae(
+        &[
+            "replay",
+            "r.json",
+            "quiet.wav",
+            "--into",
+            "case3",
+            "--dry-run",
+        ],
+        &dir,
+    );
+    assert!(out.contains("measured on this clip"), "{out}");
     nlae(&["clone", "case", "-o", "copy"], &dir);
     nlae(&["pack", "copy", "-o", "copy.nlae"], &dir);
     assert!(nlae(&["verify", "copy.nlae"], &dir).contains("VERIFIED"));
@@ -252,6 +273,105 @@ fn ask_in_plain_words_locally_and_through_a_model() {
     let chat = std::fs::read_to_string(dir.join("ds/chat.jsonl")).unwrap();
     assert!(chat.contains("\"source\":\"exchange\""), "{chat}");
     assert!(chat.contains("\"source\":\"reconstructed\""), "{chat}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The id of the removed step `nlae stack` shows (`… nlae restore <project> st_…]`).
+fn removed_id(stack: &str) -> String {
+    let line = stack
+        .lines()
+        .find(|l| l.contains('×'))
+        .expect("a removed step");
+    let at = line.find("st_").expect("its id");
+    line[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect()
+}
+
+#[test]
+fn apply_at_once_then_remove_edit_undo_redo_and_restore() {
+    let dir = workdir("apply");
+    let clip = nlae_core::golden::generate(&nlae_core::golden::spec_a_short());
+    std::fs::write(dir.join("clip.wav"), write_wav(&clip.mix, WavFormat::F32)).unwrap();
+    nlae(&["new", "clip.wav", "-o", "case"], &dir);
+
+    // Applied at once: no preview to accept.
+    let out = nlae(
+        &[
+            "plan",
+            "case",
+            "--recipe",
+            "builtin:spoken-word-cleanup",
+            "--apply",
+        ],
+        &dir,
+    );
+    assert!(out.contains("Applied 4 step(s)"), "{out}");
+    let out = nlae(&["ask", "case", "high-pass at 80 Hz", "--apply"], &dir);
+    assert!(out.contains("Applied 1 step(s)"), "{out}");
+    assert!(!out.contains("pv_"), "nothing to accept: {out}");
+
+    // Remove a step from the middle: it keeps its place; what was measured with it is flagged.
+    let out = nlae(&["remove", "case", "2", "--reason", "too much"], &dir);
+    assert!(out.contains("Removed 1 step(s)"), "{out}");
+    let stack = nlae(&["stack", "case"], &dir);
+    assert!(
+        stack.contains("noise_reduce") && stack.contains("removed: too much"),
+        "{stack}"
+    );
+    assert!(
+        stack.contains("measured before a change below it"),
+        "{stack}"
+    );
+    let out = nlae(&["remeasure", "case", "3", "--dry-run"], &dir);
+    assert!(out.contains("resolved.gain_db"), "{out}");
+    assert_eq!(
+        nlae(&["stack", "case"], &dir),
+        stack,
+        "a dry run changes nothing"
+    );
+
+    // Edit a step's values; out of range is refused, not clamped.
+    let out = nlae(&["edit", "case", "4", "cutoff_hz=120"], &dir);
+    assert!(out.contains("Changed high_pass"), "{out}");
+    let err = nlae_fails(&["edit", "case", "4", "cutoff_hz=100000"], &dir);
+    assert!(err.contains("cutoff_hz"), "{err}");
+
+    // Undo and redo walk back through the changes.
+    assert!(nlae(&["undo", "case"], &dir).contains("Undid changing high_pass"));
+    assert!(nlae(&["redo", "case"], &dir).contains("Redid changing high_pass"));
+    assert!(nlae(&["undo", "case"], &dir).contains("Undid changing high_pass"));
+    assert!(nlae(&["undo", "case"], &dir).contains("Undid removing noise_reduce"));
+    assert!(!nlae(&["stack", "case"], &dir).contains('×'));
+
+    // Removed again, then restored by its id; then measured again and exported.
+    nlae(&["remove", "case", "2"], &dir);
+    let id = removed_id(&nlae(&["stack", "case"], &dir));
+    nlae(&["restore", "case", &id], &dir);
+    let stack = nlae(&["stack", "case"], &dir);
+    assert!(
+        !stack.contains('×') && !stack.contains("measured before"),
+        "{stack}"
+    );
+    nlae(&["render", "case", "-o", "clean.wav"], &dir);
+    assert!(nlae(&["verify", "case"], &dir).contains("VERIFIED"));
+
+    nlae(&["dataset", "case", "-o", "ds"], &dir);
+    let steps: Vec<serde_json::Value> = std::fs::read_to_string(dir.join("ds/steps.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(steps.len(), 5);
+    assert!(steps.iter().all(|r| r["decision"]["outcome"] == "applied"));
+    assert!(steps.iter().all(|r| r["fate"]["outcome"] == "approved"));
+    let nr = steps
+        .iter()
+        .find(|r| r["action"]["op"] == "noise_reduce")
+        .unwrap();
+    assert_eq!(nr["fate"]["restorations"], 2);
+    assert_eq!(nr["fate"]["removals"][0]["reason"], "too much");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

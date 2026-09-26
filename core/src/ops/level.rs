@@ -171,6 +171,10 @@ impl Op for Normalise {
         &self.desc
     }
 
+    fn measures_input(&self, _params: &Value) -> bool {
+        true
+    }
+
     fn resolve(
         &self,
         params: &Value,
@@ -257,6 +261,10 @@ struct LoudnessResolved {
 impl Op for LoudnessNormalise {
     fn descriptor(&self) -> &Descriptor {
         &self.desc
+    }
+
+    fn measures_input(&self, _params: &Value) -> bool {
+        true
     }
 
     fn resolve(
@@ -360,6 +368,10 @@ fn drift_half(window_ms: f64, sr: u32) -> i64 {
 impl Op for DcRemove {
     fn descriptor(&self) -> &Descriptor {
         &self.desc
+    }
+
+    fn measures_input(&self, params: &Value) -> bool {
+        params["mode"] == "mean"
     }
 
     fn resolve(

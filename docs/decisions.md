@@ -17,6 +17,11 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Deepgram may keep dictation to improve its models unless the user opts out** — chosen by the product owner, 2026-09-25: Deepgram's default and lower price; the setting sends `mip_opt_out=true`, which costs more and needs a paid account.
 - **Dictated words fill the console box, and the user sends them with Enter** — chosen by the product owner, 2026-09-25: a misheard "undo" cannot act on its own, and a correction is recorded next to what was heard.
 - **Loudness normalisation aims at −23 LUFS by default (EBU R128)** — chosen by the product owner, 2026-09-25: the broadcast reference; −16 LUFS, common for spoken word online, is one parameter away.
+- **A request applies at once; any step of the stack can be removed, restored or edited, with undo and redo** — chosen by the product owner, 2026-09-26: with the model planning several steps at a time, judging each proposal on a 10 s window is the bottleneck, and a live stack is reviewed faster by pruning and tuning it; editing a step in place also stops corrective steps piling up. Supersedes invariants 5 (preview before committing) and 6 (nothing committed without accepting) of the brief; `01-principles.md` has the new wording.
+- **A removed step stays in its place, greyed, and can be restored** — chosen by the product owner, 2026-09-26: nothing is lost, even after later changes, and Undo and Redo move through it too.
+- **The steps above a removed, restored or edited step keep their recorded values** — chosen by the product owner, 2026-09-26: predictable, and what the user typed stays as typed. A step measured on audio that has since changed (a normalise's gain, a noise profile) is flagged, and *Measure again* is the user's own edit.
+- **Exporting approves the stack as it stands** — chosen by the product owner, 2026-09-26: without a per-step *Accept*, the export is the point where a person signs off the processing; `render.exported` already records the stack hash.
+- **The command line keeps preview → accept** — chosen by the product owner, 2026-09-26: scripted and batch work (M4) benefits from a preview to a file before committing; it also applies at once with `ask --apply`, and gains `remove`, `restore`, `edit`, `remeasure`, `undo` and `redo`.
 
 ## Platform and architecture
 
@@ -61,6 +66,14 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **At most one describe round and one correction round per request, decided in the core (`next_round`)** — a second request to see operations means the model is lost rather than short of information; the browser and the command line behave alike.
 - **The instructions with the index are prompt version 2** — the version recorded with each exchange keeps version-1 data distinguishable.
 - **The `plan` tool names every offered operation, core or on demand** — a plan may use an operation once it has been described, and the tool does not change between rounds.
+- **Every change to the stack records the steps above it again, in the same event (`chain`)** — their stack hashes chain through the changed step, so the new hashes, measurements and snapshots must be on record; the projection checks the chain and that no value changed except the edited step's.
+- **A step keeps its id through edits and re-recordings** — the id names the stack item for ratings, annotations and clones; every version is in the log.
+- **Undo and redo are logged as the inverse change, naming the change they undo or redo (`undoes`, `redoes`)** — nothing is deleted, and both lists are projected from the log, so they survive a reload. Undoing an edit brings back the earlier version exactly, not a re-measured one.
+- **`step.removed` (written before 2026-09-26) is read as excluding the top step** — old projects keep verifying, and their removed steps become restorable.
+- **A step whose input is unchanged is not rendered again when the stack changes** — determinism makes its output identical, so removing a time edit, or a step that changed nothing, costs almost nothing.
+- **Recorded-again steps drop their inferred bindings and infer them on the new input; declared ones are kept** — inference lets a step's existing bindings win, so stale inferred ones would otherwise stick.
+- **The render cache is bounded by size, least recently used first** — every change adds renders, and a 10-minute stereo render is about 230 MB; the current stack's render is kept.
+- **Drift is recorded as `resolved_on`, only when it differs from the step's input** — steps that never drifted are unchanged in the log, and a step that is measured again, or whose input comes back, loses it.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations
@@ -104,6 +117,7 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **The key is held in memory unless "remember on this device" is ticked, and travels only in the request header** — a key is not evidence and must never reach a project, log, bundle or export; the tests look for it in all of them.
 - **Everything is recorded, always** — previews, tweaks, rejections, modifications, manual work; the richest training signal.
 - [5] **Rejected attempts included in dataset exports, flagged** — they show what a person judged wrong.
+- **Steps that went onto the stack are exported with their fate: approved (the stack was exported as it stands), kept or removed, with every edit, removal and restoration** — without an *Accept*, what became of a step is the decision; an edit is the exact correction a person made. Dataset records are version 2.
 - [12] **Manual work included in exports by default** — the product owner's own local tool; exporting is an explicit act.
 - **Audio left out of dataset exports by default; `--with-audio` adds it** — voices from evidential recordings leave a bundle only deliberately; hashes join records back to the audio.
 - [6] **Ratings: overall 1–5, optional per-dimension scores, optional note; per step, plan or stack** — quick by default, richer when wanted.

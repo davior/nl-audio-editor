@@ -243,7 +243,8 @@ test("7. undo removes the top step, from the stack panel or in words, and a rati
     await expect(page.getByTestId("stack-step")).toHaveCount(0);
     await expect.poll(async () => (await nlae(page)).project.stackHash).toBe(empty);
   }
-  await logged(page, "step.removed", 2);
+  // Each undo excludes the top step; it keeps its place in the log.
+  await logged(page, "step.excluded", 2);
 });
 
 test("8. an operation the model sees only in the index is described when it asks, then used", async ({ page }) => {

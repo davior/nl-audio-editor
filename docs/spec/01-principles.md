@@ -33,14 +33,21 @@ From the brief (non-negotiable):
 1. The original audio is stored **byte-for-byte** and is never modified, transcoded,
    normalised, renamed or overwritten — including by housekeeping. All processing runs on
    a working copy.
-2. Everything is **non-destructive**: accepted steps form an ordered stack replayed over the
+2. Everything is **non-destructive**: the stack's steps form an ordered list replayed over the
    immutable source.
 3. **Nothing is ever executed as generated code.** The model only selects typed,
    schema-validated descriptors from a fixed registry.
 4. Every operation is available **conversationally and manually**; both produce the
    identical step object.
-5. Every operation **previews on a short window** (10 s by default) before it is committed.
-6. **Nothing is committed without the user accepting it.**
+5. Every step can be **auditioned on its own**, on the whole recording: the audio before it,
+   after it, and what it removed. *(Changed by the product owner, 2026-09-26. The brief asked
+   for every operation to preview on a short window before it is committed; the command line
+   still previews before accepting. See `docs/decisions.md`.)*
+6. **Nothing leaves the project without the user's action.** A request applies its change to
+   the working stack, where any step can be removed, restored or edited; **exporting approves
+   the stack as it stands**, and the export records its stack hash. *(Changed by the product
+   owner, 2026-09-26. The brief asked that nothing be committed without the user accepting
+   it.)*
 7. Hard parameter limits are enforced **in the DSP layer**, never only in a prompt. Out-of-
    range values are rejected, not clamped. There is no bypass.
 8. A **limiter is always last** in the chain.
@@ -52,7 +59,8 @@ Added by this specification:
 
 11. **The stack is the primary record.** The append-only, hash-chained event log is the
     source of truth; the edit stack is a projection of it. Every preview, tweak,
-    acceptance, rejection, modification, removal, annotation and rating is an event.
+    acceptance, rejection, application, exclusion, restoration, edit, undo, redo,
+    annotation and rating is an event.
 12. **Every value is recorded in two forms**: exact (what ran) and adaptive (how it relates
     to the clip's own analysis), so any step can be replayed exactly or re-derived on
     another clip.
@@ -69,3 +77,7 @@ Added by this specification:
     is enforced by the types the prompt builder accepts.
 18. **Clones share, never alter.** A clone copies a project at any step; it shares the
     untouched source and records its lineage in both logs.
+19. **Changing a step never changes the steps above it.** Removing, restoring or editing a
+    step keeps the values of every step above it exactly as recorded; only what they measure
+    and their hashes are recorded again. A step whose values were measured on audio that has
+    since changed is flagged, and measuring it again is the user's own edit.

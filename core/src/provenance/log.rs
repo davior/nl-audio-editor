@@ -187,8 +187,17 @@ impl EventLog {
         ev.as_object_mut()
             .expect("object")
             .insert("hash".into(), Value::String(hash));
+        // Keep exactly what is written: numbers as the canonical form reads
+        // back (`-36`, not `-36.0`), so a reopened log equals the live one.
+        let text = jcs::canonicalize(&ev).expect("events are canonicalisable");
+        let ev: Value = serde_json::from_str(&text).expect("canonical JSON parses");
         self.events.push(ev.clone());
         ev
+    }
+
+    /// Take back the event just appended, before it is written anywhere.
+    pub(crate) fn pop(&mut self) -> Option<Value> {
+        self.events.pop()
     }
 
     /// One canonical JSON line (with trailing newline) for an event.

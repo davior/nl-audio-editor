@@ -250,6 +250,40 @@ pub fn preview_replay<S: Store>(
     Ok((plan, pv))
 }
 
+/// Replay a recipe as one plan and apply it at once: record the dry-run diff
+/// (`recipe.replayed`), then apply the plan (`step.applied`). `intent` is the
+/// user's words; `opts` gives what the request came from (its plan and recipe
+/// fields are set here).
+pub fn apply_replay<S: Store>(
+    project: &mut Project<S>,
+    env: &mut dyn crate::provenance::Env,
+    recipe: &Recipe,
+    mode: ReplayMode,
+    actor: Actor,
+    opts: crate::project::ApplyOptions,
+    intent: Option<&str>,
+) -> Result<(ReplayPlan, Vec<Step>), ProjectError> {
+    let mut plan = plan_replay(project, recipe, mode, false, actor)?;
+    if let Some(w) = intent {
+        for d in plan.drafts.iter_mut() {
+            d.intent = Some(w.to_string());
+        }
+    }
+    project.record(
+        env,
+        "recipe.replayed",
+        None,
+        json!({ "recipe": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode, "dry_run": false, "diff": plan.diff }),
+    )?;
+    let opts = crate::project::ApplyOptions {
+        plan: true,
+        recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
+        ..opts
+    };
+    let steps = project.apply(env, plan.drafts.clone(), opts)?;
+    Ok((plan, steps))
+}
+
 /// Summarise a resolved value for the diff (long arrays are counted, not listed).
 pub(crate) fn summarise(v: &Value) -> Value {
     match v {
@@ -264,7 +298,13 @@ pub(crate) fn summarise(v: &Value) -> Value {
     }
 }
 
-fn resolved_diff(
+/// Whether two values are the same as written: a recorded `150` and a
+/// computed `150.0` are the same number.
+fn same(a: &Value, b: &Value) -> bool {
+    a == b || jcs::canonical_bytes(a).ok() == jcs::canonical_bytes(b).ok()
+}
+
+pub(crate) fn resolved_diff(
     i: usize,
     op: &str,
     recorded: Option<&Value>,
@@ -280,7 +320,7 @@ fn resolved_diff(
             .and_then(|r| r.get(k))
             .cloned()
             .unwrap_or(Value::Null);
-        if rec == *v || (rec.is_null() && params.get(k) == Some(v)) {
+        if same(&rec, v) || (rec.is_null() && params.get(k).is_some_and(|p| same(p, v))) {
             continue; // unchanged, or a parameter used exactly as given
         }
         let (recorded, mut new_s) = (summarise(&rec), summarise(v));

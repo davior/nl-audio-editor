@@ -24,4 +24,10 @@ bindings: { [key in string]: Binding }, actor: Actor, origin: Origin, intent?: s
  * What the DSP measured: over the preview window in a preview, over the
  * whole clip once accepted.
  */
-measurements: Record<string, unknown>, input_hash: string, output_hash?: string | null, stack_hash?: string | null, inherited_from?: InheritedRef | null, };
+measurements: Record<string, unknown>, input_hash: string, output_hash?: string | null, stack_hash?: string | null, 
+/**
+ * Render hash of the input `resolved` was measured on, when that is no
+ * longer the step's input: a step below it was removed, restored or edited
+ * since, and this step kept its values. Absent otherwise.
+ */
+resolved_on?: string | null, inherited_from?: InheritedRef | null, };

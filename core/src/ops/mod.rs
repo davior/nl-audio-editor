@@ -63,6 +63,13 @@ pub trait Op: Send + Sync {
     fn resolve(&self, params: &Value, scope: &Scope, input: &AudioBuffer)
         -> Result<Value, OpError>;
 
+    /// Whether resolving `params` measures what the input contains (its level,
+    /// a noise profile, the lines in it), so that the resolved values describe
+    /// the audio below the step. Such a step drifts when that audio changes.
+    fn measures_input(&self, _params: &Value) -> bool {
+        false
+    }
+
     /// Input samples needed on each side of any output sample.
     fn radius(&self, resolved: &Value, sample_rate: u32) -> usize;
 

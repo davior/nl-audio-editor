@@ -7,7 +7,7 @@
   "required": ["record", "record_version", "project", "stack", "stack_hash", "ratings", "counts", "comparisons"],
   "properties": {
     "record": { "const": "episode" },
-    "record_version": { "const": 1 },
+    "record_version": { "const": 2 },
     "project": { "type": "object", "required": ["id", "name", "source_sha256"] },
     "stack": { "type": "array", "items": { "type": "object", "required": ["step_id", "op", "op_version", "params", "resolved", "scope"] } },
     "stack_hash": { "type": "string" },
