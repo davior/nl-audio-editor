@@ -125,7 +125,7 @@ test("2. a dictated “undo” waits in the box until Enter", async ({ page }) =
   await expect(page.getByTestId("stack-step")).toHaveCount(0);
   const [spoken] = await logged(page, "speech.transcribed");
   expect(spoken.data).toMatchObject({ heard: "Undo.", words: "Undo.", edited: false });
-  const [removed] = await logged(page, "step.removed");
+  const [removed] = await logged(page, "step.excluded");
   expect(removed.seq).toBeGreaterThan(spoken.seq);
 });
 

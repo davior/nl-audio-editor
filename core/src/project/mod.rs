@@ -13,11 +13,13 @@
 
 pub mod bindings;
 pub mod bundle;
+mod cache;
 pub mod stack;
 pub mod step;
 pub mod store;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -30,7 +32,9 @@ use crate::ops::{registry, OpError};
 use crate::provenance::{Actor, AppInfo, Env, EventLog, Verification};
 use crate::scope::Scope;
 use crate::timeline;
-pub use stack::{PreviewRecord, StackState};
+pub use bindings::DiffEntry;
+pub use cache::DEFAULT_LIMIT as RENDER_CACHE_LIMIT;
+pub use stack::{PreviewRecord, StackChange, StackEntry, StackState};
 pub use step::{Binding, BindingSource, Origin, StateSnapshot, Step, StepDraft};
 use store::{MemStore, Store, StoreError};
 
@@ -182,6 +186,21 @@ pub struct AcceptOptions {
     pub actor: Option<Actor>,
 }
 
+/// How a request is applied at once (`Project::apply`).
+#[derive(Clone, Debug, Default)]
+pub struct ApplyOptions {
+    /// Group even a single step as a plan.
+    pub plan: bool,
+    /// The recipe the steps replay, if any.
+    pub recipe: Option<Value>,
+    /// The `assistant.exchange` event (its hash) the steps came from, if any.
+    pub exchange: Option<String>,
+    /// The `speech.transcribed` event (its hash), when the request was spoken.
+    pub dictation: Option<String>,
+    /// Who applied them (the user, unless said otherwise).
+    pub actor: Option<Actor>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Rating {
@@ -241,7 +260,7 @@ pub struct Project<S: Store> {
     pub app: AppInfo,
     pub source: AudioBuffer,
     state: StackState,
-    renders: HashMap<String, (AudioBuffer, Map<String, Value>)>,
+    renders: cache::RenderCache,
     features_cache: HashMap<String, Features>,
     /// Persist renders under `renders/` (directory projects).
     pub cache_renders: bool,
@@ -335,7 +354,7 @@ impl<S: Store> Project<S> {
                 stack_hash: sha,
                 ..Default::default()
             },
-            renders: HashMap::new(),
+            renders: cache::RenderCache::default(),
             features_cache: HashMap::new(),
             cache_renders: false,
             read_only: None,
@@ -548,7 +567,7 @@ impl<S: Store> Project<S> {
             app,
             source: audio,
             state,
-            renders: HashMap::new(),
+            renders: cache::RenderCache::default(),
             features_cache: HashMap::new(),
             cache_renders: false,
             read_only,
@@ -592,9 +611,22 @@ impl<S: Store> Project<S> {
     ) -> Result<Value> {
         self.writable()?;
         let ev = self.log.append(env, &self.app, kind, actor, data);
-        self.store
-            .append("events.jsonl", EventLog::line_of(&ev).as_bytes())?;
-        self.state = stack::project(self.log.events(), &self.manifest.source.sha256)?;
+        // An event the stack cannot take is never written.
+        let state = match stack::project(self.log.events(), &self.manifest.source.sha256) {
+            Ok(s) => s,
+            Err(e) => {
+                self.log.pop();
+                return Err(e.into());
+            }
+        };
+        if let Err(e) = self
+            .store
+            .append("events.jsonl", EventLog::line_of(&ev).as_bytes())
+        {
+            self.log.pop();
+            return Err(e.into());
+        }
+        self.state = state;
         self.manifest.log = LogHead {
             events: self.log.len() as u64,
             head: self.log.head_hash(),
@@ -632,52 +664,65 @@ impl<S: Store> Project<S> {
     pub fn render_prefix(
         &mut self,
         steps: &[RenderStep],
-    ) -> Result<(AudioBuffer, Map<String, Value>)> {
+    ) -> Result<(Arc<AudioBuffer>, Map<String, Value>)> {
         let src_hash = self.manifest.source.sha256.clone();
-        let target = step::stack_hash(&src_hash, steps);
-        if let Some(hit) = self.renders.get(&target) {
-            return Ok(hit.clone());
-        }
-        if steps.is_empty() {
-            return Ok((self.source.clone(), Map::new()));
-        }
-        // Start from the longest cached prefix.
-        let mut start = 0;
-        let mut cur = self.source.clone();
-        let mut h = src_hash.clone();
+        let keep = self.state.stack_hash.clone();
         let mut hashes = Vec::with_capacity(steps.len());
+        let mut h = src_hash.clone();
         for s in steps {
             h = step::next_stack_hash(&h, s);
             hashes.push(h.clone());
         }
+        let target = hashes.last().cloned().unwrap_or(src_hash);
+        if let Some(hit) = self.renders.get(&target) {
+            return Ok(hit);
+        }
+        if steps.is_empty() {
+            let source = Arc::new(self.source.clone());
+            self.renders
+                .insert(target, source.clone(), Map::new(), &keep);
+            return Ok((source, Map::new()));
+        }
+        // Start from the longest cached prefix.
+        let mut start = 0;
+        let mut cur: Option<Arc<AudioBuffer>> = None;
         for i in (0..steps.len()).rev() {
             if let Some((a, _)) = self.renders.get(&hashes[i]) {
-                cur = a.clone();
+                cur = Some(a);
                 start = i + 1;
                 break;
             }
             if let Some(a) = self.load_render(&hashes[i]) {
-                cur = a;
+                cur = Some(Arc::new(a));
                 start = i + 1;
                 break;
             }
         }
         let mut meas = Map::new();
         for i in start..steps.len() {
-            let out = engine::render_full(&cur, std::slice::from_ref(&steps[i]))?;
-            cur = out.audio;
+            let out = engine::render_full(
+                cur.as_deref().unwrap_or(&self.source),
+                std::slice::from_ref(&steps[i]),
+            )?;
+            let audio = Arc::new(out.audio);
             meas = out.measurements.into_iter().next().unwrap_or_default();
+            self.save_render(&hashes[i], &audio);
             self.renders
-                .insert(hashes[i].clone(), (cur.clone(), meas.clone()));
-            self.save_render(&hashes[i], &cur);
+                .insert(hashes[i].clone(), audio.clone(), meas.clone(), &keep);
+            cur = Some(audio);
         }
+        let cur = cur.expect("rendered or cached");
         if start == steps.len() {
-            if let Some((_, m)) = self.renders.get(&target) {
-                meas = m.clone();
-            }
-            self.renders.insert(target, (cur.clone(), meas.clone()));
+            // Loaded from disk, where measurements are not kept.
+            self.renders
+                .insert(target, cur.clone(), meas.clone(), &keep);
         }
         Ok((cur, meas))
+    }
+
+    /// Change how many bytes of renders are kept in memory.
+    pub fn set_render_cache_limit(&mut self, bytes: usize) {
+        self.renders.limit = bytes;
     }
 
     fn render_path(hash: &str) -> String {
@@ -741,7 +786,7 @@ impl<S: Store> Project<S> {
     /// The current stack's output (without the final limiter).
     pub fn current_render(&mut self) -> Result<AudioBuffer> {
         let steps = self.render_steps();
-        Ok(self.render_prefix(&steps)?.0)
+        Ok(Arc::unwrap_or_clone(self.render_prefix(&steps)?.0))
     }
 
     /// The source, the stack's render or the level-matched residual, borrowed.
@@ -756,10 +801,10 @@ impl<S: Store> Project<S> {
                     return Ok(&self.source);
                 }
                 let key = step::stack_hash(&self.manifest.source.sha256, &steps);
-                if !self.renders.contains_key(&key) {
+                if !self.renders.contains(&key) {
                     self.render_prefix(&steps)?;
                 }
-                Ok(&self.renders[&key].0)
+                Ok(self.renders.audio(&key).expect("just rendered"))
             }
             "output" => {
                 let layout = self.edit_layout();
@@ -767,20 +812,23 @@ impl<S: Store> Project<S> {
                     return self.audio("stack");
                 }
                 let key = format!("output:{}", self.state.stack_hash);
-                if !self.renders.contains_key(&key) {
-                    let processed = self.audio("stack")?.clone();
-                    let out = layout.apply(&processed);
-                    self.renders.insert(key.clone(), (out, Map::new()));
+                if !self.renders.contains(&key) {
+                    let out = layout.apply(self.audio("stack")?);
+                    let keep = self.state.stack_hash.clone();
+                    self.renders
+                        .insert(key.clone(), Arc::new(out), Map::new(), &keep);
                 }
-                Ok(&self.renders[&key].0)
+                Ok(self.renders.audio(&key).expect("just made"))
             }
             "residual" => {
                 let key = format!("residual:{}", self.state.stack_hash);
-                if !self.renders.contains_key(&key) {
+                if !self.renders.contains(&key) {
                     let r = self.residual_render()?;
-                    self.renders.insert(key.clone(), (r, Map::new()));
+                    let keep = self.state.stack_hash.clone();
+                    self.renders
+                        .insert(key.clone(), Arc::new(r), Map::new(), &keep);
                 }
-                Ok(&self.renders[&key].0)
+                Ok(self.renders.audio(&key).expect("just made"))
             }
             w => invalid(format!(
                 "unknown render `{w}` (source | stack | output | residual)"
@@ -927,12 +975,56 @@ impl<S: Store> Project<S> {
                 input_hash: input.render_hash(),
                 output_hash: None,
                 stack_hash: None,
+                resolved_on: None,
                 inherited_from: None,
             };
             chain.push(s.render_step());
             out.push(s);
         }
         Ok(out)
+    }
+
+    /// A spoken request named by a preview or an application must be in the log.
+    fn check_dictation(&self, dictation: Option<&str>) -> Result<()> {
+        if let Some(h) = dictation {
+            let logged = self
+                .log
+                .events()
+                .iter()
+                .any(|e| e["type"] == "speech.transcribed" && e["hash"] == h);
+            if !logged {
+                return invalid(format!("no spoken request {h} in this project's log"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Render and measure resolved steps on top of `base` (whose stack hash is
+    /// `h`): measurements over the whole clip, render and stack hashes, the
+    /// features after, inferred bindings.
+    fn finalise(&mut self, base: &[RenderStep], h: &str, steps: &mut [Step]) -> Result<()> {
+        let mut chain = base.to_vec();
+        let mut h = h.to_string();
+        for s in steps.iter_mut() {
+            let (input, _) = self.render_prefix(&chain)?;
+            chain.push(s.render_step());
+            let (output, meas) = self.render_prefix(&chain)?;
+            h = step::next_stack_hash(&h, &s.render_step());
+            s.measurements = meas;
+            if timeline::is_edit(&s.op) {
+                s.measurements.insert(
+                    "output_duration_s".into(),
+                    json!(self.output_duration_s(&chain)),
+                );
+            }
+            s.output_hash = Some(output.render_hash());
+            s.stack_hash = Some(h.clone());
+            s.state_after = Some(self.snapshot(&output, &s.scope));
+            if let Some(before) = s.state_before.clone() {
+                s.bindings = bindings::infer(s, &before.clip, &input);
+            }
+        }
+        Ok(())
     }
 
     /// Preview one step, or several as a plan, on a short window. Logged as
@@ -946,16 +1038,7 @@ impl<S: Store> Project<S> {
         if drafts.is_empty() {
             return invalid("nothing to preview");
         }
-        if let Some(h) = &opts.dictation {
-            let logged = self
-                .log
-                .events()
-                .iter()
-                .any(|e| e["type"] == "speech.transcribed" && e["hash"] == h.as_str());
-            if !logged {
-                return invalid(format!("no spoken request {h} in this project's log"));
-            }
-        }
+        self.check_dictation(opts.dictation.as_deref())?;
         let base = self.render_steps();
         let base_hash = self.state.stack_hash.clone();
         let is_plan = opts.plan || drafts.len() > 1;
@@ -1143,28 +1226,10 @@ impl<S: Store> Project<S> {
         } else {
             rec.steps.clone()
         };
-        let mut chain = base.clone();
-        let mut h = self.state.stack_hash.clone();
-        for s in steps.iter_mut() {
-            let (input, _) = self.render_prefix(&chain)?;
-            chain.push(s.render_step());
-            let (output, meas) = self.render_prefix(&chain)?;
-            h = step::next_stack_hash(&h, &s.render_step());
-            s.measurements = meas;
-            if timeline::is_edit(&s.op) {
-                s.measurements.insert(
-                    "output_duration_s".into(),
-                    json!(self.output_duration_s(&chain)),
-                );
-            }
-            s.output_hash = Some(output.render_hash());
-            s.stack_hash = Some(h.clone());
-            let after = self.snapshot(&output, &s.scope);
-            s.state_after = Some(after);
-            if let Some(before) = s.state_before.clone() {
-                s.bindings = bindings::infer(s, &before.clip, &input);
-            }
-            if opts.note.is_some() {
+        let top = self.state.stack_hash.clone();
+        self.finalise(&base, &top, &mut steps)?;
+        if opts.note.is_some() {
+            for s in steps.iter_mut() {
                 s.note = opts.note.clone();
             }
         }
@@ -1183,7 +1248,7 @@ impl<S: Store> Project<S> {
                 json!({ "preview_id": preview_id, "step": steps[0] }),
             )?;
         }
-        Ok(steps)
+        Ok(self.as_recorded(&steps))
     }
 
     pub fn reject(
@@ -1208,7 +1273,73 @@ impl<S: Store> Project<S> {
         Ok(())
     }
 
-    /// Undo the top step. The history stays in the log.
+    /// Apply one step, or several as a plan, at once: resolved on the current
+    /// stack, rendered over the whole clip and measured. Logged as
+    /// `step.applied`; the steps can be removed, restored and edited afterwards.
+    pub fn apply(
+        &mut self,
+        env: &mut dyn Env,
+        drafts: Vec<StepDraft>,
+        opts: ApplyOptions,
+    ) -> Result<Vec<Step>> {
+        self.writable()?;
+        if drafts.is_empty() {
+            return invalid("nothing to apply");
+        }
+        self.check_dictation(opts.dictation.as_deref())?;
+        let base = self.render_steps();
+        let is_plan = opts.plan || drafts.len() > 1;
+        let plan_id = if is_plan {
+            Some(env.new_id("pl"))
+        } else {
+            None
+        };
+        let mut steps = self.resolve_drafts(env, &base, &drafts, plan_id.clone())?;
+        let top = self.state.stack_hash.clone();
+        self.finalise(&base, &top, &mut steps)?;
+        let mut data = json!({ "kind": if is_plan { "plan" } else { "step" }, "steps": steps });
+        let linked = [
+            ("plan_id", plan_id.map(Value::from)),
+            ("recipe", opts.recipe),
+            ("exchange", opts.exchange.map(Value::from)),
+            ("dictation", opts.dictation.map(Value::from)),
+        ];
+        for (k, v) in linked {
+            if let Some(v) = v {
+                data[k] = v;
+            }
+        }
+        let actor = opts.actor.unwrap_or_else(Actor::user);
+        self.append(env, "step.applied", &actor, data)?;
+        Ok(self.as_recorded(&steps))
+    }
+
+    /// Exclude steps: they stop playing a part in the render but keep their
+    /// places, and can be restored. The steps above keep their values and are
+    /// recorded again. Returns them.
+    pub fn exclude(
+        &mut self,
+        env: &mut dyn Env,
+        ids: &[String],
+        reason: Option<String>,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        self.set_active(env, ids, false, reason, None, actor)
+    }
+
+    /// Bring excluded steps back to their places, with the values they had.
+    /// The steps above keep their values and are recorded again. Returns the
+    /// restored steps and the steps above, as recorded.
+    pub fn restore(
+        &mut self,
+        env: &mut dyn Env,
+        ids: &[String],
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        self.set_active(env, ids, true, None, None, actor)
+    }
+
+    /// Exclude the top step (it keeps its place and can be restored).
     pub fn remove_top(&mut self, env: &mut dyn Env, actor: Option<Actor>) -> Result<Step> {
         let top = self
             .state
@@ -1216,13 +1347,372 @@ impl<S: Store> Project<S> {
             .last()
             .cloned()
             .ok_or_else(|| ProjectError::Invalid("the stack is empty".into()))?;
-        self.append(
-            env,
-            "step.removed",
-            &actor.unwrap_or_else(Actor::user),
-            json!({ "step_id": top.step_id }),
-        )?;
+        self.exclude(env, std::slice::from_ref(&top.step_id), None, actor)?;
         Ok(top)
+    }
+
+    /// Change a step's parameters: `changes` are merged into them, and the step
+    /// is resolved again on its input. The steps above keep their values and are
+    /// recorded again. Logged as `step.edited`; returns the edited step and the
+    /// steps above, as recorded.
+    pub fn edit(
+        &mut self,
+        env: &mut dyn Env,
+        step_id: &str,
+        changes: &Value,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        let cur = self.active_step(step_id)?;
+        let mut params = cur.params.clone();
+        match (params.as_object_mut(), changes.as_object()) {
+            (Some(p), Some(c)) => {
+                for (k, v) in c {
+                    p.insert(k.clone(), v.clone());
+                }
+            }
+            _ => return invalid("changes are an object of parameter values"),
+        }
+        let params = registry().validate(&cur.op, cur.op_version, &params, &cur.scope)?;
+        // Compared as written: 150 and 150.0 are the same value.
+        let canonical = |v: &Value| crate::provenance::jcs::canonical_bytes(v).ok();
+        if canonical(&params) == canonical(&cur.params) {
+            return invalid(format!("the parameters of `{step_id}` are unchanged"));
+        }
+        self.resolve_again(env, cur, params, false, actor)
+    }
+
+    /// Measure a step again on its current input, with the same parameters
+    /// (after a change below it). Logged as `step.edited` with `remeasured`.
+    pub fn remeasure(
+        &mut self,
+        env: &mut dyn Env,
+        step_id: &str,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        let cur = self.active_step(step_id)?;
+        let params = cur.params.clone();
+        self.resolve_again(env, cur, params, true, actor)
+    }
+
+    /// What measuring a step again would change. Nothing is changed or logged.
+    pub fn remeasure_diff(&mut self, step_id: &str) -> Result<Vec<DiffEntry>> {
+        let cur = self.active_step(step_id)?;
+        let i = self
+            .state
+            .steps
+            .iter()
+            .position(|s| s.step_id == step_id)
+            .expect("active");
+        let below: Vec<RenderStep> = self.state.steps[..i]
+            .iter()
+            .map(Step::render_step)
+            .collect();
+        let (input, _) = self.render_prefix(&below)?;
+        let op = registry().get(&cur.op, cur.op_version)?;
+        let r = op.resolve(&cur.params, &cur.scope, &input)?;
+        let mut diff =
+            crate::recipe::resolved_diff(i, &cur.op, Some(&cur.resolved), &r, &cur.params);
+        for d in diff.iter_mut() {
+            d.reason = "measured again on the audio below it now".into();
+        }
+        Ok(diff)
+    }
+
+    /// Take back the last change to the stack, logged as the inverse change
+    /// (`undoes`). Returns the change taken back.
+    pub fn undo(&mut self, env: &mut dyn Env, actor: Option<Actor>) -> Result<StackChange> {
+        let c = self
+            .state
+            .undo
+            .last()
+            .cloned()
+            .ok_or_else(|| ProjectError::Invalid("nothing to undo".into()))?;
+        let link = Some(("undoes", c.event.clone()));
+        match c.kind.as_str() {
+            "applied" | "restored" => {
+                self.set_active(env, &c.step_ids, false, None, link, actor)?;
+            }
+            "excluded" => {
+                self.set_active(env, &c.step_ids, true, None, link, actor)?;
+            }
+            _ => {
+                let before = c.before.as_deref().unwrap_or_default();
+                let version = self.recorded_version(before, &c.step_ids[0])?;
+                self.edit_to(env, version, link, actor)?;
+            }
+        }
+        Ok(c)
+    }
+
+    /// Repeat the last change taken back, logged as that change again
+    /// (`redoes`). Returns the change repeated.
+    pub fn redo(&mut self, env: &mut dyn Env, actor: Option<Actor>) -> Result<StackChange> {
+        let c = self
+            .state
+            .redo
+            .last()
+            .cloned()
+            .ok_or_else(|| ProjectError::Invalid("nothing to redo".into()))?;
+        let link = Some(("redoes", c.event.clone()));
+        match c.kind.as_str() {
+            "applied" | "restored" => {
+                self.set_active(env, &c.step_ids, true, None, link, actor)?;
+            }
+            "excluded" => {
+                self.set_active(env, &c.step_ids, false, None, link, actor)?;
+            }
+            _ => {
+                let version = self.recorded_version(&c.event, &c.step_ids[0])?;
+                self.edit_to(env, version, link, actor)?;
+            }
+        }
+        Ok(c)
+    }
+
+    /// An active step, by id.
+    fn active_step(&self, id: &str) -> Result<Step> {
+        if let Some(s) = self.state.steps.iter().find(|s| s.step_id == id) {
+            return Ok(s.clone());
+        }
+        if self.state.excluded.contains_key(id) {
+            return invalid(format!("`{id}` is excluded; restore it first"));
+        }
+        invalid(format!("no step `{id}` on the stack"))
+    }
+
+    /// A step as an event in this log recorded it.
+    fn recorded_version(&self, event: &str, id: &str) -> Result<Step> {
+        self.log
+            .events()
+            .iter()
+            .find(|e| e["hash"] == event)
+            .and_then(|e| stack::step_in_event(e, id))
+            .ok_or_else(|| {
+                ProjectError::Invalid(format!("no version of `{id}` recorded by {event}"))
+            })
+    }
+
+    /// Every place in the stack: each step in its current version, and whether
+    /// it is active.
+    fn places(&self) -> Vec<(Step, bool)> {
+        self.state
+            .entries
+            .iter()
+            .map(|e| {
+                let s = self.state.step(&e.step_id).expect("projected").clone();
+                (s, e.active)
+            })
+            .collect()
+    }
+
+    fn set_active(
+        &mut self,
+        env: &mut dyn Env,
+        ids: &[String],
+        on: bool,
+        reason: Option<String>,
+        link: Option<(&str, String)>,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        self.writable()?;
+        if ids.is_empty() {
+            return invalid("no steps named");
+        }
+        let mut places = self.places();
+        let mut k = usize::MAX;
+        for (n, id) in ids.iter().enumerate() {
+            if ids[..n].contains(id) {
+                return invalid(format!("`{id}` is named twice"));
+            }
+            let i = self
+                .state
+                .position(id)
+                .ok_or_else(|| ProjectError::Invalid(format!("no step `{id}` on the stack")))?;
+            if places[i].1 == on {
+                return invalid(format!(
+                    "`{id}` is already {}",
+                    if on { "on the stack" } else { "excluded" }
+                ));
+            }
+            places[i].1 = on;
+            k = k.min(i);
+        }
+        let chain = self.record_again(&places, k, None)?;
+        let mut data = json!({ "step_ids": ids, "chain": chain });
+        if let Some(r) = reason {
+            data["reason"] = json!(r);
+        }
+        if let Some((key, h)) = link {
+            data[key] = json!(h);
+        }
+        let kind = if on { "step.restored" } else { "step.excluded" };
+        self.append(env, kind, &actor.unwrap_or_else(Actor::user), data)?;
+        Ok(self.as_recorded(&chain))
+    }
+
+    /// Resolve an active step again on its input with `params`, and record it
+    /// and the steps above it.
+    fn resolve_again(
+        &mut self,
+        env: &mut dyn Env,
+        cur: Step,
+        params: Value,
+        remeasured: bool,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        self.writable()?;
+        let i = self
+            .state
+            .steps
+            .iter()
+            .position(|s| s.step_id == cur.step_id)
+            .expect("active");
+        let below: Vec<RenderStep> = self.state.steps[..i]
+            .iter()
+            .map(Step::render_step)
+            .collect();
+        let (input, _) = self.render_prefix(&below)?;
+        let op = registry().get(&cur.op, cur.op_version)?;
+        let mut new = cur.clone();
+        new.resolved = op.resolve(&params, &cur.scope, &input)?;
+        new.params = params;
+        new.resolved_on = None;
+        self.log_edit(env, cur, new, remeasured, None, actor)
+    }
+
+    /// Bring back a recorded version of a step (undoing or redoing an edit).
+    fn edit_to(
+        &mut self,
+        env: &mut dyn Env,
+        version: Step,
+        link: Option<(&str, String)>,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        self.writable()?;
+        let cur = self.active_step(&version.step_id)?;
+        let mut new = cur.clone();
+        new.params = version.params.clone();
+        new.resolved = version.resolved.clone();
+        // Where its values were measured; compared with its input when recorded.
+        new.resolved_on = Some(version.resolved_on.unwrap_or(version.input_hash));
+        self.log_edit(env, cur, new, false, link, actor)
+    }
+
+    fn log_edit(
+        &mut self,
+        env: &mut dyn Env,
+        cur: Step,
+        new: Step,
+        remeasured: bool,
+        link: Option<(&str, String)>,
+        actor: Option<Actor>,
+    ) -> Result<Vec<Step>> {
+        let k = self.state.position(&cur.step_id).expect("on the stack");
+        let mut places = self.places();
+        let to_params = new.params.clone();
+        places[k].0 = new;
+        let chain = self.record_again(&places, k, Some(&cur.step_id))?;
+        let mut data = json!({
+            "step_id": cur.step_id,
+            "from_params": cur.params,
+            "to_params": to_params,
+            "chain": chain,
+        });
+        if remeasured {
+            data["remeasured"] = json!(true);
+        }
+        if let Some((key, h)) = link {
+            data[key] = json!(h);
+        }
+        self.append(env, "step.edited", &actor.unwrap_or_else(Actor::user), data)?;
+        Ok(self.as_recorded(&chain))
+    }
+
+    /// Steps as the log now records them (numbers as they read back).
+    fn as_recorded(&self, steps: &[Step]) -> Vec<Step> {
+        steps
+            .iter()
+            .map(|s| {
+                self.state
+                    .step(&s.step_id)
+                    .cloned()
+                    .unwrap_or_else(|| s.clone())
+            })
+            .collect()
+    }
+
+    /// New versions of the active steps from place `k` of `places` up, with
+    /// `places` as the stack will be. Each step keeps its values; what depends
+    /// on its input (measurements, snapshots, inferred bindings, render and
+    /// stack hashes) is recorded again. A step whose input and values have not
+    /// changed has the same output, so it is not rendered again. `fresh` names a
+    /// step whose values changed (an edit), with `resolved_on` saying where they
+    /// were measured if not on its current input.
+    fn record_again(
+        &mut self,
+        places: &[(Step, bool)],
+        k: usize,
+        fresh: Option<&str>,
+    ) -> Result<Vec<Step>> {
+        let reg = registry();
+        let below: Vec<&Step> = places[..k]
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(s, _)| s)
+            .collect();
+        let mut chain: Vec<RenderStep> = below.iter().map(|s| s.render_step()).collect();
+        let mut h = below
+            .last()
+            .and_then(|s| s.stack_hash.clone())
+            .unwrap_or_else(|| self.manifest.source.sha256.clone());
+        let mut input_hash = match below.last() {
+            Some(s) => s.output_hash.clone().unwrap_or_default(),
+            None => self.source_render_hash().to_string(),
+        };
+        let keep = self.state.stack_hash.clone();
+        let mut out = Vec::new();
+        for (s, on) in &places[k..] {
+            if !on {
+                continue;
+            }
+            let mut s = s.clone();
+            let old_hash = s.stack_hash.clone();
+            chain.push(s.render_step());
+            h = step::next_stack_hash(&h, &s.render_step());
+            let measured_on = s.resolved_on.take().unwrap_or_else(|| s.input_hash.clone());
+            let changed = fresh == Some(s.step_id.as_str());
+            if !changed && s.input_hash == input_hash && s.output_hash.is_some() {
+                // The same input and values: the same output.
+                if let Some(old) = &old_hash {
+                    self.renders.alias(old, &h, &keep);
+                }
+            } else {
+                let (input, _) = self.render_prefix(&chain[..chain.len() - 1])?;
+                let (output, meas) = self.render_prefix(&chain)?;
+                s.input_hash = input_hash.clone();
+                let before = self.snapshot(&input, &s.scope);
+                s.measurements = meas;
+                s.output_hash = Some(output.render_hash());
+                s.state_after = Some(self.snapshot(&output, &s.scope));
+                s.bindings
+                    .retain(|_, b| b.source == BindingSource::Declared);
+                s.bindings = bindings::infer(&s, &before.clip, &input);
+                s.state_before = Some(before);
+            }
+            if timeline::is_edit(&s.op) {
+                s.measurements.insert(
+                    "output_duration_s".into(),
+                    json!(self.output_duration_s(&chain)),
+                );
+            }
+            let op = reg.get(&s.op, s.op_version)?;
+            s.resolved_on = (op.measures_input(&s.params) && measured_on != s.input_hash)
+                .then_some(measured_on);
+            s.stack_hash = Some(h.clone());
+            input_hash = s.output_hash.clone().unwrap_or_default();
+            out.push(s);
+        }
+        Ok(out)
     }
 
     pub fn annotate(
@@ -1268,7 +1758,7 @@ impl<S: Store> Project<S> {
         let audio = if layout.is_identity() {
             audio
         } else {
-            layout.apply(&audio)
+            Arc::new(layout.apply(&audio))
         };
         let lim = engine::final_limiter(Some(&self.manifest.final_limiter))?;
         let out = engine::render_full(&audio, std::slice::from_ref(&lim))?;
@@ -1424,7 +1914,7 @@ impl<S: Store> Project<S> {
                 stack_hash: self.manifest.source.sha256.clone(),
                 ..Default::default()
             },
-            renders: HashMap::new(),
+            renders: cache::RenderCache::default(),
             features_cache: self.features_cache.clone(),
             cache_renders: false,
             read_only: None,

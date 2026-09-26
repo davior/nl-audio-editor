@@ -119,6 +119,11 @@ pub struct Step {
     pub output_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack_hash: Option<String>,
+    /// Render hash of the input `resolved` was measured on, when that is no
+    /// longer the step's input: a step below it was removed, restored or edited
+    /// since, and this step kept its values. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_from: Option<InheritedRef>,
 }

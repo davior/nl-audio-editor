@@ -27,6 +27,7 @@
     "input_hash": { "$ref": "#/$defs/hash" },
     "output_hash": { "$ref": "#/$defs/hash" },
     "stack_hash": { "$ref": "#/$defs/hash" },
+    "resolved_on": { "$ref": "#/$defs/hash", "description": "The render hash of the input `resolved` was measured on, when that is no longer the step's input: a step below was removed, restored or edited since, and this step kept its values." },
     "inherited_from": {
       "type": "object", "required": ["project", "step_id", "event_hash"],
       "properties": { "project": { "type": "string" }, "step_id": { "type": "string" }, "event_hash": { "type": "string" } }

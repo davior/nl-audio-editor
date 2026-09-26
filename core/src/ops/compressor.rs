@@ -167,6 +167,10 @@ impl Op for Compressor {
         &self.desc
     }
 
+    fn measures_input(&self, params: &Value) -> bool {
+        !params["makeup_db"].is_number()
+    }
+
     fn resolve(
         &self,
         params: &Value,

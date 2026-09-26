@@ -82,7 +82,7 @@ fn a_spoken_request_is_logged_linked_to_its_preview_and_exported_with_what_was_h
     let pv = p.preview(&mut env, routed_drafts(words), opts).unwrap();
     assert_eq!(pv.record.dictation.as_deref(), Some(h.as_str()));
     assert_eq!(pv.record.steps[0].intent.as_deref(), Some(words));
-    assert_eq!(pv.record.steps[0].params["depth_db"], json!(12.0));
+    assert_eq!(pv.record.steps[0].params["depth_db"].as_f64(), Some(12.0));
     p.accept(&mut env, &pv.record.preview_id, AcceptOptions::default())
         .unwrap();
 

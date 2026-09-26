@@ -16,8 +16,8 @@ use nlae_core::audio::{decode, AudioBuffer};
 use nlae_core::dataset::{self, AudioInclusion, ExportOptions, ProjectData};
 use nlae_core::project::store::{DirStore, MemStore, Store};
 use nlae_core::project::{
-    bundle, open_bundle, AcceptOptions, CreateOptions, Origin, PreviewOptions, Project, Rating,
-    StepDraft,
+    bundle, open_bundle, AcceptOptions, ApplyOptions, CreateOptions, Origin, PreviewOptions,
+    Project, Rating, StackChange, Step, StepDraft,
 };
 use nlae_core::provenance::{Actor, AppInfo};
 use nlae_core::recipe::{plan_replay, Recipe, ReplayMode};
@@ -93,8 +93,46 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Remove the top step (history is kept).
+    /// Take back the last change to the stack (it stays in the log).
     Undo { project: PathBuf },
+    /// Repeat the last change taken back.
+    Redo { project: PathBuf },
+    /// Remove steps from the stack. They keep their places and can be restored;
+    /// the steps above keep their values.
+    Remove {
+        project: PathBuf,
+        /// Step numbers (as `nlae stack` shows them) or ids.
+        #[arg(required = true)]
+        steps: Vec<String>,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Bring removed steps back to their places, with the values they had.
+    Restore {
+        project: PathBuf,
+        /// Step ids (as `nlae stack` shows them).
+        #[arg(required = true)]
+        steps: Vec<String>,
+    },
+    /// Change a step's parameters, e.g. `nlae edit case 2 cutoff_hz=120`. The
+    /// step is measured again on its input; the steps above keep their values.
+    Edit {
+        project: PathBuf,
+        /// Step number (as `nlae stack` shows it) or id.
+        step: String,
+        /// NAME=VALUE (VALUE is read as JSON when it can be: 120, true, "auto").
+        #[arg(required = true)]
+        values: Vec<String>,
+    },
+    /// Measure a step again on the audio below it now (after a change below it).
+    Remeasure {
+        project: PathBuf,
+        /// Step number (as `nlae stack` shows it) or id.
+        step: String,
+        /// Show what would change; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show the stack.
     Stack {
         project: PathBuf,
@@ -246,6 +284,10 @@ struct AskArgs {
     /// Write what the proposal removes here.
     #[arg(long)]
     residual: Option<PathBuf>,
+    /// Apply the change at once, to the whole recording, instead of previewing
+    /// it. It can be removed or edited afterwards.
+    #[arg(long, conflicts_with_all = ["window", "out", "residual"])]
+    apply: bool,
 }
 
 /// Where requests go: provider name (recorded), base URL, model, key.
@@ -343,6 +385,22 @@ fn ask(a: &AskArgs) -> Res<()> {
         Route::Recipe { name } => {
             println!("Handled here: the built-in `{name}` recipe, measured on this recording.");
             let recipe = Recipe::builtin(&name).ok_or(format!("no built-in recipe `{name}`"))?;
+            if a.apply {
+                let (plan, steps) = nlae_core::recipe::apply_replay(
+                    &mut p,
+                    &mut e,
+                    &recipe,
+                    ReplayMode::Adaptive,
+                    Actor::user(),
+                    ApplyOptions::default(),
+                    Some(&a.words),
+                )
+                .map_err(|e| e.to_string())?;
+                println!("Dry-run diff:");
+                show::diff(&plan.diff);
+                print_applied(&p, &steps);
+                return Ok(());
+            }
             let (plan, pv) = nlae_core::recipe::preview_replay(
                 &mut p,
                 &mut e,
@@ -365,14 +423,21 @@ fn ask(a: &AskArgs) -> Res<()> {
                 .iter()
                 .map(|s| s.draft(Origin::Cli, &a.words))
                 .collect();
+            if a.apply {
+                let steps = p
+                    .apply(&mut e, drafts, ApplyOptions::default())
+                    .map_err(|e| e.to_string())?;
+                print_applied(&p, &steps);
+                return Ok(());
+            }
             let pv = p
                 .preview(&mut e, drafts, preview_opts(None))
                 .map_err(|e| e.to_string())?;
             print_preview(&p, &pv, &a.out, &a.residual)
         }
         Route::Undo => {
-            let s = p.remove_top(&mut e, None).map_err(|e| e.to_string())?;
-            println!("Removed {} ({}); it stays in the log.", s.step_id, s.op);
+            let c = p.undo(&mut e, None).map_err(|e| e.to_string())?;
+            println!("Undid {} (it stays in the log).", change_words(&p, &c));
             Ok(())
         }
         Route::Listen { which } => {
@@ -481,6 +546,16 @@ fn ask(a: &AskArgs) -> Res<()> {
                 Origin::Cli,
                 &a.words,
             );
+            if a.apply {
+                let opts = ApplyOptions {
+                    plan: parsed.plan,
+                    exchange: Some(hash),
+                    ..Default::default()
+                };
+                let steps = p.apply(&mut e, drafts, opts).map_err(|e| e.to_string())?;
+                print_applied(&p, &steps);
+                return Ok(());
+            }
             let mut opts = preview_opts(Some(hash));
             opts.plan = parsed.plan;
             let pv = p.preview(&mut e, drafts, opts).map_err(|e| e.to_string())?;
@@ -532,6 +607,9 @@ struct PlanCommon {
     out: Option<PathBuf>,
     #[arg(long)]
     residual: Option<PathBuf>,
+    /// Apply the plan at once instead of previewing it.
+    #[arg(long, conflicts_with_all = ["dry_run", "window", "out", "residual"])]
+    apply: bool,
 }
 
 #[derive(Args)]
@@ -713,16 +791,91 @@ fn run_plan<S: Store>(p: &mut Project<S>, recipe: &Recipe, common: &PlanCommon) 
     if common.dry_run {
         return Ok(());
     }
+    let recipe_ref = json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode });
+    if common.apply {
+        let opts = ApplyOptions {
+            plan: true,
+            recipe: Some(recipe_ref),
+            ..Default::default()
+        };
+        let steps = p
+            .apply(&mut e, plan.drafts.clone(), opts)
+            .map_err(|e| e.to_string())?;
+        print_applied(p, &steps);
+        return Ok(());
+    }
     let opts = PreviewOptions {
         window: parse_window(&common.window)?,
         plan: true,
-        recipe: Some(json!({ "name": plan.recipe, "hash": plan.recipe_hash, "mode": plan.mode })),
+        recipe: Some(recipe_ref),
         ..Default::default()
     };
     let pv = p
         .preview(&mut e, plan.drafts.clone(), opts)
         .map_err(|e| e.to_string())?;
     print_preview(p, &pv, &common.out, &common.residual)
+}
+
+/// After a change: the steps as recorded, and the stack as it now stands.
+fn print_applied<S: Store>(p: &Project<S>, steps: &[Step]) {
+    println!(
+        "Applied {} step(s) to the whole recording. The stack now:",
+        steps.len()
+    );
+    for line in show::stack(p.state()) {
+        println!("{line}");
+    }
+    for s in steps {
+        let m = show::measurements(s);
+        if !m.is_empty() {
+            println!("  {} (whole scope): {m}", s.op);
+        }
+    }
+    println!("Remove one: nlae remove <project> <number>   Change one: nlae edit <project> <number> NAME=VALUE");
+}
+
+/// A step on the stack, by its number in `nlae stack` (from 1) or its id.
+fn step_ref<S: Store>(p: &Project<S>, s: &str) -> Res<String> {
+    if let Ok(n) = s.parse::<usize>() {
+        return n
+            .checked_sub(1)
+            .and_then(|i| p.state().steps.get(i))
+            .map(|s| s.step_id.clone())
+            .ok_or_else(|| format!("no step {n} on the stack (see nlae stack)"));
+    }
+    match p.state().step(s) {
+        Some(_) => Ok(s.to_string()),
+        None => Err(format!("no step `{s}` on the stack (see nlae stack)")),
+    }
+}
+
+/// A change to the stack, in words: "removing gain", "changing high_pass".
+fn change_words<S: Store>(p: &Project<S>, c: &StackChange) -> String {
+    let ops: Vec<&str> = c
+        .step_ids
+        .iter()
+        .map(|id| p.state().step(id).map(|s| s.op.as_str()).unwrap_or("?"))
+        .collect();
+    let verb = match c.kind.as_str() {
+        "applied" => "applying",
+        "excluded" => "removing",
+        "restored" => "restoring",
+        _ => "changing",
+    };
+    format!("{verb} {}", ops.join(", "))
+}
+
+/// `NAME=VALUE` pairs as parameter values; a VALUE is JSON when it reads as JSON.
+fn parse_values(values: &[String]) -> Res<Value> {
+    let mut m = serde_json::Map::new();
+    for v in values {
+        let (k, x) = v
+            .split_once('=')
+            .ok_or_else(|| format!("`{v}`: use NAME=VALUE"))?;
+        let x = serde_json::from_str(x).unwrap_or_else(|_| Value::String(x.to_string()));
+        m.insert(k.trim().to_string(), x);
+    }
+    Ok(Value::Object(m))
 }
 
 fn data_of(p: &mut Project<DirStore>, with_audio: bool) -> Res<ProjectData> {
@@ -1011,8 +1164,91 @@ fn run(cli: Cli) -> Res<()> {
         Cmd::Ask(a) => ask(&a)?,
         Cmd::Undo { project } => {
             let mut p = open_dir(&project)?;
-            let s = p.remove_top(&mut e, None).map_err(|e| e.to_string())?;
-            println!("Removed {} ({}); it stays in the log.", s.step_id, s.op);
+            let c = p.undo(&mut e, None).map_err(|e| e.to_string())?;
+            println!("Undid {} (it stays in the log).", change_words(&p, &c));
+            for line in show::stack(p.state()) {
+                println!("{line}");
+            }
+        }
+        Cmd::Redo { project } => {
+            let mut p = open_dir(&project)?;
+            let c = p.redo(&mut e, None).map_err(|e| e.to_string())?;
+            println!("Redid {}.", change_words(&p, &c));
+            for line in show::stack(p.state()) {
+                println!("{line}");
+            }
+        }
+        Cmd::Remove {
+            project,
+            steps,
+            reason,
+        } => {
+            let mut p = open_dir(&project)?;
+            let ids = steps
+                .iter()
+                .map(|s| step_ref(&p, s))
+                .collect::<Res<Vec<_>>>()?;
+            let chain = p
+                .exclude(&mut e, &ids, reason, None)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Removed {} step(s); they keep their places and can be restored. {} step(s) above recorded again with their values.",
+                ids.len(),
+                chain.len()
+            );
+            for line in show::stack(p.state()) {
+                println!("{line}");
+            }
+        }
+        Cmd::Restore { project, steps } => {
+            let mut p = open_dir(&project)?;
+            let ids = steps
+                .iter()
+                .map(|s| step_ref(&p, s))
+                .collect::<Res<Vec<_>>>()?;
+            p.restore(&mut e, &ids, None).map_err(|e| e.to_string())?;
+            println!("Restored {} step(s) to their places.", ids.len());
+            for line in show::stack(p.state()) {
+                println!("{line}");
+            }
+        }
+        Cmd::Edit {
+            project,
+            step,
+            values,
+        } => {
+            let mut p = open_dir(&project)?;
+            let id = step_ref(&p, &step)?;
+            let changes = parse_values(&values)?;
+            let chain = p
+                .edit(&mut e, &id, &changes, None)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Changed {} ({}); {} step(s) above recorded again with their values.",
+                chain[0].op,
+                show::resolved(&chain[0]),
+                chain.len() - 1
+            );
+            for line in show::stack(p.state()) {
+                println!("{line}");
+            }
+        }
+        Cmd::Remeasure {
+            project,
+            step,
+            dry_run,
+        } => {
+            let mut p = open_dir(&project)?;
+            let id = step_ref(&p, &step)?;
+            let diff = p.remeasure_diff(&id).map_err(|e| e.to_string())?;
+            println!("Measured again on the audio below it now:");
+            show::diff(&diff);
+            if !dry_run {
+                p.remeasure(&mut e, &id, None).map_err(|e| e.to_string())?;
+                for line in show::stack(p.state()) {
+                    println!("{line}");
+                }
+            }
         }
         Cmd::Stack { project, json } => {
             let p = open_dir(&project)?;
@@ -1037,8 +1273,8 @@ fn run(cli: Cli) -> Res<()> {
                     l.forked_at_step.as_deref().unwrap_or("the start")
                 );
             }
-            for (i, s) in p.state().steps.iter().enumerate() {
-                println!("{}", show::step_line(i, s));
+            for line in show::stack(p.state()) {
+                println!("{line}");
             }
             let open: Vec<&str> = p
                 .state()

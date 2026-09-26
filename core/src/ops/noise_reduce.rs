@@ -113,6 +113,10 @@ impl Op for NoiseReduce {
         &self.desc
     }
 
+    fn measures_input(&self, _params: &Value) -> bool {
+        true
+    }
+
     fn resolve(
         &self,
         params: &Value,

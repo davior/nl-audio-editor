@@ -163,6 +163,10 @@ impl Op for Gate {
         &self.desc
     }
 
+    fn measures_input(&self, params: &Value) -> bool {
+        !params["threshold_dbfs"].is_number()
+    }
+
     fn resolve(
         &self,
         params: &Value,

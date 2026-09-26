@@ -2,19 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nlae.local/schemas/dataset/step-record.schema.json",
   "title": "Dataset step record",
-  "description": "One line of steps.jsonl: state -> action -> decision -> outcome.",
+  "description": "One line of steps.jsonl: state -> action -> decision -> outcome, and for a step that went onto the stack, its fate.",
   "type": "object",
-  "required": ["record", "record_version", "id", "project", "decision", "state", "action", "outcome", "hashes"],
+  "required": ["record", "record_version", "id", "project", "decision", "state", "action", "outcome", "fate", "hashes"],
   "properties": {
     "record": { "const": "step" },
-    "record_version": { "const": 1 },
+    "record_version": { "const": 2 },
     "id": { "type": "string" },
     "project": { "type": "object", "required": ["id", "name", "source_sha256"] },
     "decision": {
       "type": "object",
       "required": ["outcome", "applied", "previews_before_decision"],
       "properties": {
-        "outcome": { "enum": ["accepted", "rejected", "superseded", "switched_off"] },
+        "outcome": { "enum": ["accepted", "applied", "rejected", "superseded", "switched_off"] },
         "applied": { "type": "boolean" },
         "modification": { "type": ["object", "null"], "properties": { "from_params": { "type": "object" }, "to_params": { "type": "object" } } },
         "previews_before_decision": { "type": "integer", "minimum": 0 }
@@ -31,6 +31,42 @@
       } },
     "outcome": { "type": "object", "required": ["measurements"] },
     "rating": { "type": ["object", "null"] },
+    "fate": {
+      "description": "What became of a step that went onto the stack (accepted or applied): removed (excluded at the end), approved (on the stack, and the stack was exported as it stands at the end) or kept, with every edit, removal and restoration on the way. Null for a step that never went onto the stack.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["outcome", "exported", "applied_at", "edits", "removals", "restorations"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome": { "enum": ["approved", "kept", "removed"] },
+            "exported": { "type": "boolean", "description": "On the stack at an export, in any version." },
+            "applied_at": { "type": "string" },
+            "edits": { "type": "array", "items": {
+              "type": "object", "required": ["at", "by", "from_params", "to_params", "remeasured"],
+              "properties": {
+                "by": { "$ref": "../step.schema.json#/$defs/actor" },
+                "from_params": { "type": "object" },
+                "to_params": { "type": "object" },
+                "remeasured": { "type": "boolean" },
+                "undoes": { "$ref": "../step.schema.json#/$defs/hash" },
+                "redoes": { "$ref": "../step.schema.json#/$defs/hash" }
+              } } },
+            "removals": { "type": "array", "items": {
+              "type": "object", "required": ["at", "by"],
+              "properties": {
+                "by": { "$ref": "../step.schema.json#/$defs/actor" },
+                "reason": { "type": ["string", "null"] },
+                "undoes": { "$ref": "../step.schema.json#/$defs/hash" },
+                "redoes": { "$ref": "../step.schema.json#/$defs/hash" }
+              } } },
+            "restorations": { "type": "integer", "minimum": 0 },
+            "final": { "type": "object", "required": ["params", "resolved"], "description": "The values at the end, when they changed after the step went onto the stack." }
+          }
+        }
+      ]
+    },
     "hashes": { "type": "object", "required": ["source", "input"] }
   },
   "$defs": {

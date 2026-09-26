@@ -1,7 +1,7 @@
 //! Human-readable summaries of steps, previews and reports.
 
 use nlae_core::project::bindings::DiffEntry;
-use nlae_core::project::{OpenReport, Step};
+use nlae_core::project::{OpenReport, StackState, Step};
 use nlae_core::scope::Scope;
 use serde_json::Value;
 
@@ -158,6 +158,44 @@ fn short(v: &Value) -> String {
     } else {
         s
     }
+}
+
+/// The stack in order: active steps numbered (the numbers other commands
+/// take), excluded ones in their places with their ids, drifted ones flagged.
+pub fn stack(state: &StackState) -> Vec<String> {
+    let mut n = 0;
+    let mut out = Vec::new();
+    for e in &state.entries {
+        let Some(s) = state.step(&e.step_id) else {
+            continue;
+        };
+        if e.active {
+            let mut line = step_line(n, s);
+            n += 1;
+            if e.edits > 0 {
+                line.push_str("  (edited)");
+            }
+            if e.drifted {
+                line.push_str(&format!(
+                    "  (measured before a change below it: nlae remeasure <project> {n})"
+                ));
+            }
+            out.push(line);
+        } else {
+            let reason = e
+                .reason
+                .as_deref()
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default();
+            out.push(format!(
+                " ×  {:<20} {}  [removed{reason}; nlae restore <project> {}]",
+                s.op,
+                resolved(s),
+                s.step_id
+            ));
+        }
+    }
+    out
 }
 
 pub fn report(r: &OpenReport) {
