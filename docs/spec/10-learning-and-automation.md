@@ -13,11 +13,22 @@ Every decided step is a training example:
 - **Action** — the operation and its values in both forms: exact (`resolved`) and adaptive
   (`params` + `bindings`), plus who proposed it and the user's words (`intent`).
 - **Decision** — accepted, rejected (with reason), or modified (the proposal and the change,
-  side by side). The number of previews and tweaks before the decision.
+  side by side). The number of previews and tweaks before the decision. A request applied at
+  once has no decision of its own; what became of its step, its **fate**, stands in for one
+  (every step that went onto the stack, accepted or applied, has one):
+  - `approved` — on the stack at the end, and the stack was exported as it stands;
+  - `kept` — on the stack at the end, but not exported as it stands;
+  - `removed` — excluded at the end.
+
+  With it, every edit (the parameters before and after, side by side, and whether it was a
+  re-measure, an undo or a redo), every removal (when, by whom, and the reason, if given),
+  every restoration, whether the step was ever exported, and its final values when they
+  changed. An edit is the most precise signal there is: the exact correction a person made.
 - **Outcome** — `state_after`, the DSP's measurements, and any rating.
 
 Rejected attempts are recorded and exported (flagged as not applied): they are the richest
-signal about what a person judged wrong. Manual work is recorded and exported by default.
+signal about what a person judged wrong. When requests apply at once, removals and edits are
+their counterpart. Manual work is recorded and exported by default.
 
 ## Exact and adaptive forms
 
@@ -52,7 +63,7 @@ explains the change. A replay becomes a plan, previewed and accepted as one unit
 
 | File | One record per | Contents |
 |---|---|---|
-| `steps.jsonl` | decided step | state → action (both forms) → actor, origin, intent → decision → outcome → rating → lineage, hashes |
+| `steps.jsonl` | decided or applied step | state → action (both forms) → actor, origin, intent → decision → outcome → rating → lineage, hashes |
 | `episodes.jsonl` | project | source features, final stack, stack and output hashes, ratings, lineage; clones forked from the same step are linked as comparison pairs |
 | `chat.jsonl` | decided proposal, or step with an intent | OpenAI chat fine-tuning format. When the model proposed it, the logged exchange itself: exactly what was sent (words, analysis numbers, tools) and what came back (`metadata.source: "exchange"`, with the model, provider and prompt version). Otherwise reconstructed with the same system prompt and message format: the user's words and the analysis summary → a tool call against the registry's schema (`"reconstructed"`). Either way with the user's decision |
 | `manifest.json` | export | schema, feature and registry versions, options, counts, SHA-256 of each file |
@@ -79,7 +90,8 @@ learn which chain to propose.
    a threshold.
 3. **Batch.** Apply proposals across a folder with per-file review before rendering.
 
-The model never acts unreviewed: proposal first, acceptance by a person, everything recorded.
+The model never acts unreviewed: its changes are applied to a working stack that a person
+reviews, prunes and edits, and nothing is exported without them; everything is recorded.
 
 ## Open
 

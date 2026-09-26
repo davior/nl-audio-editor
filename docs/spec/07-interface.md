@@ -36,17 +36,47 @@ rate (the browser resamples only for output).
 
 ## Stack panel
 
-The accepted steps, projected from the log, each with:
+The stack's steps, projected from the log, each with:
 - its operation and key values;
 - its actor (for the assistant, its model and provider) and origin;
 - the words that asked for it.
 
 Plans are shown as a group. Rejected attempts are visible in the log viewer, flagged as not
-applied.
+applied. A 1–5 rating of the stack as it stands is logged as `stack.rated`.
 
-*Undo last step* removes the top step; the removal is logged and the step stays in the log. A
-1–5 rating of the stack as it stands is logged as `stack.rated`. Listening at an earlier step
-is done by cloning there.
+**Changing the stack** (agreed with the product owner, 2026-09-26; see
+`03-projects-clones-provenance.md`):
+- Clicking a step opens its editor, generated from the operation's descriptor with its limits.
+  *Apply* re-renders from that step up.
+- × removes a step, with an optional reason (recorded). It stays in its place, greyed and
+  struck through, with *Restore*.
+- *Undo* and *Redo* in the panel's head walk back through the changes.
+- A drifted step (measured before a change below it) shows a badge that opens *Measure again*,
+  with what would change.
+- With a step selected, the monitor offers *Before this step*, *After it* and *What it
+  removed*, on the whole recording. This replaces cloning to listen at an earlier step.
+- While the steps above a change are rendered again, the panel says how many.
+
+Until the browser has these, *Undo last step* excludes the top step (`step.excluded`).
+
+## Apply-first editing
+
+Chosen by the product owner, 2026-09-26: a request applies at once, and the stack is where
+changes are reviewed, pruned and tuned. In the browser:
+- A request applies its steps to the whole recording. The console shows an *Applied* card:
+  - each operation, its scope and key values;
+  - its measurements over the whole recording;
+  - the model's explanation;
+  - *Undo this* and *Edit*.
+- There is no preview window and nothing is set aside: the view and the playhead stay where
+  they are, and the monitor switches to *Processed*.
+- *Export WAV* says that it approves the stack as it stands, listing its steps and how many
+  are excluded.
+- "undo" and "redo" are handled here, without the model.
+
+Status: built in the core and the command line (`nlae ask --apply`, `remove`, `restore`,
+`edit`, `remeasure`, `undo`, `redo`). The browser still previews each request and waits for
+*Accept* until the interface change (M1 below).
 
 ## Recording
 
