@@ -110,15 +110,19 @@ with `nlae pack`). Projects are kept in the browser's private storage.
 
 Say what should happen in the console under the lanes: "clean this recording up", "cut 3,100
 to 3,200 Hz by 12 dB", "high-pass at 80 Hz", "boost 3 kHz by 3 dB", "gate the pauses",
-"normalise to −23 LUFS", "dehum", or, with an area selected on the spectrogram, "compress the
-bangs here". Each request is applied at once, to the whole recording, and the stack is where
-you review it:
+"normalise to −23 LUFS", "dehum", "raise the pitch by 2 semitones", or, with an area selected
+on the spectrogram, "compress the bangs here". Each request is applied at once, to the whole
+recording, and the stack is where you review it:
 - click a step's name to change its values, or to hear it on its own (before it, after it, and
   what it removed);
 - × removes a step: it keeps its place, and *Restore* brings it back;
 - *Undo* and *Redo* walk through the changes;
 - a step measured before a change below it is flagged, and *Measure again* shows what would
   change.
+- a pitch shift is labelled *altered (processed, not factual)* in the stack, the log, bundles
+  and dataset records (an exported WAV carries no label). It keeps the duration and, unless
+  asked otherwise, the formants; remove hum before shifting, since a sound that never pauses
+  can dip briefly where the shift restarts.
 
 Exporting approves the stack as it stands.
 
@@ -134,8 +138,8 @@ hatched, *Processed* plays the result, and the exported WAV has a cue marker at 
 **The model.** Routine requests like those are handled without a model and need no setup.
 Anything else goes to the provider chosen in the console's settings, with your words and
 analysis numbers only, never audio. The model always has the core operations; the others
-(the EQs, the gate, loudness and hum removal) it sees in an index and asks to see before using
-one. The key stays in the browser and is never written to a project.
+(the EQs, the gate, loudness and hum removal, pitch shift) it sees in an index and asks to see
+before using one. The key stays in the browser and is never written to a project.
 - **DeepSeek** (the default) needs a key. Whether DeepSeek accepts requests from a web page
   is not confirmed yet: *Test connection* in the settings tells you.
 - **Ollama** must allow the app's addresses:

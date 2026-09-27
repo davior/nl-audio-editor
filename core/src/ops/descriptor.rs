@@ -19,6 +19,8 @@ pub enum OpClass {
     Attenuative,
     /// Synthesises content; labelled "processed, not factual".
     Reconstruction,
+    /// Alters what was recorded (a pitch shift, and later effects); labelled
+    /// "processed, not factual".
     Creative,
     Safety,
     /// Changes the timeline (removes time, inserts silence); applied to the
@@ -32,6 +34,7 @@ impl OpClass {
         match self {
             OpClass::Analysis => "analysis",
             OpClass::Reconstruction => "reconstruction (processed, not factual)",
+            OpClass::Creative => "altered (processed, not factual)",
             OpClass::Edit => "edited (time removed or inserted)",
             _ => "processed",
         }

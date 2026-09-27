@@ -53,6 +53,12 @@ pub fn tan(x: f64) -> f64 {
     libm::tan(x)
 }
 
+/// The angle of `(x, y)`, in (−π, π].
+#[inline]
+pub fn atan2(y: f64, x: f64) -> f64 {
+    libm::atan2(y, x)
+}
+
 /// Amplitude ratio → dB, floored at [`DB_FLOOR`].
 #[inline]
 pub fn amp_to_db(a: f64) -> f64 {

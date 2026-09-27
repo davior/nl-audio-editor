@@ -11,6 +11,7 @@ disallowed-methods = [
   { path = "f64::sin", reason = "use crate::math (libm) for cross-target determinism" },
   { path = "f64::cos", reason = "use crate::math (libm) for cross-target determinism" },
   { path = "f64::tan", reason = "use crate::math (libm) for cross-target determinism" },
+  { path = "f64::atan2", reason = "use crate::math (libm) for cross-target determinism" },
   { path = "f64::mul_add", reason = "fused multiply-add changes rounding; keep arithmetic explicit" },
   { path = "f32::powf", reason = "use crate::math (libm) for cross-target determinism" },
   { path = "f32::powi", reason = "use crate::math (libm) for cross-target determinism" },

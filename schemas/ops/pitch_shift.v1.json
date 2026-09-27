@@ -1,0 +1,25 @@
+{
+  "id": "pitch_shift",
+  "version": 1,
+  "title": "Pitch shift",
+  "summary": "Raise or lower the pitch by a number of semitones, keeping the duration. Keeps the voice's formants (its character) by default; without them a voice sounds smaller going up and larger going down. The result is altered audio: labelled processed, not factual.",
+  "category": "time_pitch",
+  "class": "creative",
+  "tier": "on_demand",
+  "scopes": ["clip", "time_range"],
+  "params": [
+    { "id": "semitones", "title": "Shift", "type": "number", "unit": "semitones", "min": -12, "max": 12, "step": 0.01, "required": true,
+      "help": "Positive raises the pitch, negative lowers it; 12 is an octave, 0.01 a cent." },
+    { "id": "preserve_formants", "title": "Keep the formants", "type": "bool", "default": true,
+      "help": "Keep the spectral envelope where it is, so a voice keeps its character. Off, the envelope moves with the pitch." }
+  ],
+  "identity": [{ "semitones": 0 }],
+  "residual": "n/a",
+  "measurements": [
+    { "id": "ratio", "title": "Frequency ratio" },
+    { "id": "level_change_db", "title": "Level change", "unit": "dB" },
+    { "id": "peak_before_dbfs", "title": "Peak before", "unit": "dBFS" },
+    { "id": "peak_after_dbfs", "title": "Peak after", "unit": "dBFS" }
+  ],
+  "binding_hints": []
+}

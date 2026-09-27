@@ -142,10 +142,47 @@ Class `edit`, category `editing`, residual `n/a`.
   12.000-15.500 s of the original (3.500 s)`.
 - **Recipes:** edits are not saved in them, because they belong to one recording.
 
-## Time and pitch (M3+)
+## Time and pitch
 
-Time stretch, pitch shift, formant shift, gap compression, alignment, crossfade. Residual
-kind `n/a`.
+| Operation | Status | Notes |
+|---|---|---|
+| `pitch_shift` | **built** (brought forward from M3) | Creative, labelled *altered (processed, not factual)*; residual `n/a`. `semitones` −12…+12, in hundredths (cents), required; `preserve_formants` (on). The duration and the timeline are kept. Scope `clip` or `time_range` (5 ms fades at interior edges; outside it the audio is copied exactly). Resolves to `ratio` = 2^(semitones/12), to six decimals. |
+| Time stretch, formant shift, gap compression, alignment, crossfade | M3+ | Residual kind `n/a`. |
+
+### `pitch_shift` — how it works
+
+A phase vocoder with identity phase locking (Laroche and Dolson, 1999) on the STFT grid
+anchored to the clip start: 43 ms frames at 75 % overlap (scaled with the rate), each
+transform zero-padded to twice the frame.
+
+1. Each frame's peaks are found in the channels' summed power: bins louder than the two on
+   each side. Every bin belongs to one peak's region, bounded by the lowest bin between two
+   peaks.
+2. A peak's frequency is measured from its phase advance since the frame before. Its region
+   moves, intact, by the whole number of bins nearest to where that frequency should go;
+   zero padding keeps the rounding within a quarter of the frame's bin.
+3. The region's phases are rotated by an angle that grows each frame by the change in
+   frequency times the hop, so the moved partial has exactly the new frequency and stays
+   coherent from frame to frame.
+4. With `preserve_formants`, each moved bin is scaled by the spectral envelope at its
+   destination over the envelope at its source (at most +24 dB), so the envelope stays where
+   it was. The envelope is the peaks' levels joined in dB: a cepstral envelope follows the
+   deep valleys between the harmonics of a clean voice, and moved the formants with them.
+5. The same moves, rotations and gains apply to every channel, so the differences between
+   channels (the stereo image, polarity) are kept. A DC offset stays where it is.
+
+**Finite reach.** The rotations carry over from frame to frame; in a textbook phase vocoder
+every output sample then depends on everything before it (against invariant 14). Here they
+restart from zero once in every cell of 2 s on a grid anchored to the clip start, at the
+quietest frame of the cell (the earliest, on a tie): in speech, a pause. Output depends on at
+most two cells before it and one after, so the reach is 4.05 s at 48 kHz and a preview equals
+the same span of the full render. What it costs:
+- on speech, nothing measurable: shifted voices score the same against an unbounded vocoder
+  whether the cells are 1 s, 2 s or unbounded;
+- a sound that never pauses (a hum, a held note) can dip for a few tens of milliseconds at a
+  restart, by up to 11 dB on a pure tone. Remove hum before shifting the pitch.
+
+**Measurements**: `ratio`, `level_change_db`, `peak_before_dbfs`, `peak_after_dbfs`.
 
 ## Stereo and spatial (M2)
 
@@ -155,7 +192,10 @@ Downmix, mid/side, width, balance, channel alignment, polarity correction.
 
 Saturation, reverb, delays, lo-fi; identity-altering operations separately gated.
 `OPEN:` how much of this is exposed at all (brief question 11) — a policy question with
-evidentiary consequences.
+evidentiary consequences. `pitch_shift` (above) is the first creative operation: every step is
+labelled *altered (processed, not factual)* in the log, the stack, bundles and dataset records,
+and nothing else gates it yet. An exported WAV does not carry the label: `OPEN:` whether it
+should (a comment chunk, like the cue markers at time edits).
 
 ## Analysis (read-only)
 

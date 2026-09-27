@@ -20,6 +20,7 @@ pub mod level;
 pub mod limiter;
 pub mod mask;
 pub mod noise_reduce;
+pub mod pitch;
 pub mod spectral;
 
 use std::collections::BTreeMap;
@@ -149,6 +150,7 @@ const DESCRIPTORS: &[&str] = &[
     include_str!("../../../schemas/ops/gate.v1.json"),
     include_str!("../../../schemas/ops/loudness_normalise.v1.json"),
     include_str!("../../../schemas/ops/hum_reduce.v1.json"),
+    include_str!("../../../schemas/ops/pitch_shift.v1.json"),
 ];
 
 fn build(desc: Descriptor) -> Box<dyn Op> {
@@ -172,6 +174,7 @@ fn build(desc: Descriptor) -> Box<dyn Op> {
         ("gate", 1) => Box::new(gate::Gate { desc }),
         ("loudness_normalise", 1) => Box::new(level::LoudnessNormalise { desc }),
         ("hum_reduce", 1) => Box::new(hum::HumReduce { desc }),
+        ("pitch_shift", 1) => Box::new(pitch::PitchShift { desc }),
         (id, v) => panic!("descriptor {id} v{v} has no implementation"),
     }
 }

@@ -52,6 +52,8 @@ export function describe(s: Step): string {
         ? "no hum found"
         : `${n("fundamental_hz", 2)} Hz hum, ${lines.length} harmonics −${n("depth_db", 0)} dB`;
     }
+    case "pitch_shift":
+      return `${(r.semitones as number) > 0 ? "+" : ""}${n("semitones", 2)} semitones (×${n("ratio", 4)}), formants ${r.preserve_formants === false ? "moved" : "kept"}`;
     default:
       return "";
   }

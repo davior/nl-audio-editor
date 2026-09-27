@@ -47,6 +47,11 @@ from M2, because the reference workflow needs them.
     and asks for their schemas (`describe_operations`), one round at most;
   - router phrases for all eight, and a describe round in the console and `nlae ask`.
 
+- `pitch_shift` was brought forward from M3, as requested on 2026-09-27: a
+  phase vocoder with phase locking and formant preservation, whose phase tracking restarts in
+  pauses so its reach stays finite; creative class, labelled *altered (processed, not
+  factual)*; on demand, with router phrases.
+
   Still to do in M2: generated panels with their parity tests, model-planned composite goals,
   level riding, voice-band EQ, de-click and de-clip, and authenticity analysis.
 - Still open for M1, all needing the hosts allowed from the build environment, or a person

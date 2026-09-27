@@ -84,5 +84,6 @@ panels are generated (M2), the parity test extends to panels and tool schemas.
 | `gate` v1 | attenuative | on demand | Lower the level in the pauses, by up to a set range |
 | `loudness_normalise` v1 | corrective | on demand | Bring the integrated loudness (LUFS) to a target |
 | `hum_reduce` v1 | attenuative | on demand | Cut the mains hum and its harmonics |
+| `pitch_shift` v1 | creative | on demand | Raise or lower the pitch by semitones, keeping the duration |
 
 Full parameter tables are in `05-operation-catalogue.md` and the descriptor files.

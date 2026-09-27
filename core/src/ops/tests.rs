@@ -145,6 +145,16 @@ fn active_cases() -> Vec<(&'static str, Value, Scope)> {
             Scope::Clip,
         ),
         ("hum_reduce", json!({"fundamental": "50"}), Scope::Clip),
+        (
+            "pitch_shift",
+            json!({"semitones": 3}),
+            Scope::TimeRange { t0: 0.5, t1: 2.5 },
+        ),
+        (
+            "pitch_shift",
+            json!({"semitones": -5, "preserve_formants": false}),
+            Scope::Clip,
+        ),
     ]
 }
 
@@ -184,6 +194,7 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
                 "duration_s" => 0.25,
                 "gain_db" => 3.0,
                 "db_per_octave" => 1.0,
+                "semitones" => 2.0,
                 _ => 1100.0,
             };
             given.insert(p.id.clone(), json!(v));
@@ -217,10 +228,10 @@ fn every_descriptor_has_an_implementation_and_its_defaults_are_accepted() {
         )
         .unwrap();
     }
-    // Nineteen operations; line_reduce has two versions (v1 kept for replays).
-    assert_eq!(ids.len(), 20, "descriptors (operation × version)");
+    // Twenty operations; line_reduce has two versions (v1 kept for replays).
+    assert_eq!(ids.len(), 21, "descriptors (operation × version)");
     ids.dedup();
-    assert_eq!(ids.len(), 19, "operations");
+    assert_eq!(ids.len(), 20, "operations");
 }
 
 #[test]
@@ -254,6 +265,12 @@ fn out_of_range_and_unknown_parameters_are_rejected_not_clamped() {
         ("loudness_normalise", json!({"target_lufs": 0})),
         ("hum_reduce", json!({"fundamental": "55"})),
         ("hum_reduce", json!({"harmonics": 0})),
+        ("pitch_shift", json!({"semitones": 12.5})),
+        ("pitch_shift", json!({})),
+        (
+            "pitch_shift",
+            json!({"semitones": 2, "preserve_formants": "yes"}),
+        ),
     ];
     for (op, p) in bad {
         let e = reg.validate(op, 1, &p, &Scope::Clip).unwrap_err();
@@ -430,6 +447,7 @@ fn chains_preview_exactly_too() {
             Scope::Clip,
         ),
         ("compressor", json!({}), Scope::Clip),
+        ("pitch_shift", json!({"semitones": 2}), Scope::Clip),
         ("limiter", json!({}), Scope::Clip),
     ] {
         let s = step(op, p, scope, &cur);

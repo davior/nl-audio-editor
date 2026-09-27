@@ -97,6 +97,8 @@ enum Unit {
     Lufs,
     /// Time, scaled to seconds.
     Seconds,
+    /// A musical interval, scaled to semitones (cents, octaves).
+    Semitones,
     None,
 }
 
@@ -263,6 +265,15 @@ fn numbers(text: &str) -> Vec<(f64, Unit, f64)> {
             (Unit::Seconds, 1.0)
         } else if ["min", "mins", "minute", "minutes"].iter().any(|w| word(w)) {
             (Unit::Seconds, 60.0)
+        } else if ["semitone", "semitones", "semi-tone", "semi-tones"]
+            .iter()
+            .any(|w| word(w))
+        {
+            (Unit::Semitones, 1.0)
+        } else if ["cent", "cents"].iter().any(|w| word(w)) {
+            (Unit::Semitones, 0.01)
+        } else if ["octave", "octaves"].iter().any(|w| word(w)) {
+            (Unit::Semitones, 12.0)
         } else {
             (Unit::None, 1.0)
         };
@@ -419,9 +430,9 @@ fn decibels(nums: &[(f64, Unit, f64)]) -> Vec<f64> {
         .collect()
 }
 
-/// The filters, EQ, gate, loudness and hum removal, when the words name one
-/// with what it needs. Checked before the generic cuts, so "cut below 100 Hz"
-/// is a high-pass and not a line at 100 Hz.
+/// The filters, EQ, gate, loudness, hum removal and pitch shift, when the
+/// words name one with what it needs. Checked before the generic cuts, so
+/// "cut below 100 Hz" is a high-pass and not a line at 100 Hz.
 fn catalogue(
     t: &str,
     nums: &[(f64, Unit, f64)],
@@ -447,6 +458,73 @@ fn catalogue(
         ],
     );
     let boosting = has_any(t, &["boost", "raise", "lift", "bring up"]);
+
+    // Pitch: "raise the pitch by 2 semitones", "pitch down an octave",
+    // "transpose up 30 cents". Only with an amount: "make the voice deeper"
+    // is left to the model.
+    if has_word(t, "pitch") || has_word(t, "transpose") {
+        let stated = nums
+            .iter()
+            .find(|(_, u, _)| *u == Unit::Semitones)
+            .map(|&(v, _, scale)| v * scale);
+        let spoken = if has_any(t, &["an octave", "one octave"]) {
+            Some(12.0)
+        } else if has_any(t, &["a semitone", "one semitone"]) {
+            Some(1.0)
+        } else {
+            None
+        };
+        if let Some(amount) = stated.or(spoken) {
+            let up = has_word(t, "up") || has_any(t, &["raise", "higher"]);
+            let down = has_word(t, "down") || has_any(t, &["lower", "deeper", "drop"]);
+            let st = if down && !up {
+                -amount.abs()
+            } else if up && !down {
+                amount.abs()
+            } else {
+                amount
+            };
+            let st = (st * 100.0).round() / 100.0;
+            let move_formants = has_any(
+                t,
+                &[
+                    "and formants",
+                    "and the formants",
+                    "formants too",
+                    "formants as well",
+                    "move the formants",
+                    "without the formants",
+                    "without keeping the formants",
+                    "don't keep the formants",
+                    "chipmunk",
+                ],
+            );
+            let mut params = json!({ "semitones": st });
+            if move_formants {
+                params["preserve_formants"] = json!(false);
+            }
+            let unit = if st.abs() == 1.0 {
+                "semitone"
+            } else {
+                "semitones"
+            };
+            return Some(step(
+                "pitch_shift",
+                params,
+                scope,
+                format!(
+                    "Shift the pitch {} {} {unit}, keeping the duration{}, {whole}.",
+                    if st >= 0.0 { "up" } else { "down" },
+                    st.abs(),
+                    if move_formants {
+                        " (the formants move too)"
+                    } else {
+                        " and the formants"
+                    }
+                ),
+            ));
+        }
+    }
 
     // Loudness: "normalise to -16 LUFS", "loudness to -23".
     let lufs = nums.iter().find(|(_, u, _)| *u == Unit::Lufs).map(|n| n.0);
@@ -1262,6 +1340,46 @@ mod tests {
             json!({"target_peak_dbfs": -1.0}),
         );
         is("boost it by 6 dB", "gain", json!({"gain_db": 6.0}));
+        is(
+            "raise the pitch by 2 semitones",
+            "pitch_shift",
+            json!({"semitones": 2.0}),
+        );
+        is(
+            "Lower the pitch 3.5 semitones.",
+            "pitch_shift",
+            json!({"semitones": -3.5}),
+        );
+        is(
+            "pitch shift -1 semitone",
+            "pitch_shift",
+            json!({"semitones": -1.0}),
+        );
+        is(
+            "pitch down an octave",
+            "pitch_shift",
+            json!({"semitones": -12.0}),
+        );
+        is(
+            "transpose up 30 cents",
+            "pitch_shift",
+            json!({"semitones": 0.3}),
+        );
+        is(
+            "pitch up a semitone and the formants too",
+            "pitch_shift",
+            json!({"semitones": 1.0, "preserve_formants": false}),
+        );
+        is(
+            "shift the pitch down by minus 2 semitones",
+            "pitch_shift",
+            json!({"semitones": -2.0}),
+        );
+        let s = r("raise the pitch by 2 semitones");
+        assert_eq!(
+            s.understood,
+            "Shift the pitch up 2 semitones, keeping the duration and the formants, across the whole recording."
+        );
         assert_eq!(r("remove the hum").op, "line_reduce");
         assert_eq!(r("remove the 750 Hz line").op, "line_reduce");
         // Short words only as words.
@@ -1277,7 +1395,13 @@ mod tests {
         let s = only_step(route("high-pass here at 100 Hz", Some(&sel)));
         assert_eq!(s.scope, Scope::TimeRange { t0: 1.0, t1: 2.0 });
         // Not enough to go on: the model decides.
-        for w in ["low-pass it", "make it brighter", "boost the presence"] {
+        for w in [
+            "low-pass it",
+            "make it brighter",
+            "boost the presence",
+            "make the voice deeper",
+            "raise the pitch",
+        ] {
             assert_eq!(route(w, None), Route::Model, "{w}");
         }
     }

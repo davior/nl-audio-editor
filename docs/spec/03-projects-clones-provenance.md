@@ -88,7 +88,7 @@ automation; only `actor` and `origin` differ.
 | `intent`, `rationale`, `note` | the user's words verbatim; the assistant's explanation; a free note |
 | `state_before`, `state_after` | features snapshots of the input and output |
 | `measurements` | what the DSP measured while doing it |
-| `class`, `label` | registry class; `processed` or `reconstruction (processed, not factual)` |
+| `class`, `label` | registry class; `processed`, `reconstruction (processed, not factual)` or, for creative work such as a pitch shift, `altered (processed, not factual)` |
 | `input_hash`, `output_hash`, `stack_hash` | render hashes and the stack hash after this step |
 | `resolved_on` | the render hash of the input `resolved` was measured on, when that is no longer the step's input (a step below was removed, restored or edited since) |
 | `inherited_from` | for steps inherited by a clone: parent project, step id, event hash |
