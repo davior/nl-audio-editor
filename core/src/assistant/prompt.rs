@@ -187,11 +187,15 @@ pub fn tools() -> Vec<Value> {
     tools
 }
 
+/// What follows the user's words in their turn. The numbers after it are
+/// compact JSON, so it occurs there only as this marker.
+const CONTEXT_MARK: &str = "\n\nAnalysis: ";
+
 /// The user's turn: their words, then the numbers they are about.
 pub fn user_message(words: &str, ctx: &AssistantContext) -> String {
     let compact = |v: &Value| serde_json::to_string(v).unwrap_or_default();
     format!(
-        "{words}\n\nAnalysis: {}\nStack: {}\nSelection: {}",
+        "{words}{CONTEXT_MARK}{}\nStack: {}\nSelection: {}",
         compact(&ctx.analysis),
         compact(&serde_json::to_value(&ctx.stack).unwrap_or_default()),
         ctx.selection
@@ -199,6 +203,18 @@ pub fn user_message(words: &str, ctx: &AssistantContext) -> String {
             .map(|s| compact(&serde_json::to_value(s).unwrap_or_default()))
             .unwrap_or_else(|| "none".into())
     )
+}
+
+/// The user's words in a request made by [`build_request`], or in a
+/// follow-up to one: the turn that carries the numbers is theirs.
+pub fn words_of(request: &Value) -> Option<String> {
+    request["messages"]
+        .as_array()?
+        .iter()
+        .rev()
+        .filter(|m| m["role"] == "user")
+        .find_map(|m| m["content"].as_str()?.rsplit_once(CONTEXT_MARK))
+        .map(|(words, _)| words.to_string())
 }
 
 /// Refuse a request carrying anything that looks like sample data.
@@ -431,5 +447,32 @@ mod tests {
         assert_eq!(last["role"], "tool");
         assert_eq!(last["tool_call_id"], "call_1");
         assert!(last["content"].as_str().unwrap().contains("out of range"));
+    }
+
+    #[test]
+    fn the_words_are_read_back_from_a_request_and_its_follow_ups() {
+        let history = [
+            Turn {
+                role: "user".into(),
+                text: "make it louder".into(),
+            },
+            Turn {
+                role: "assistant".into(),
+                text: "Raised by 6 dB.".into(),
+            },
+        ];
+        let req = build_request("m", &ctx(), &history, "now take the hiss out").unwrap();
+        assert_eq!(words_of(&req).as_deref(), Some("now take the hiss out"));
+        // A correction without tool calls adds a user turn of its own; the words stay.
+        let words_only =
+            json!({ "choices": [{ "message": { "role": "assistant", "content": "?" } }] });
+        let fix = build_correction(&req, &words_only, &["nothing to use".into()]).unwrap();
+        assert_eq!(words_of(&fix).as_deref(), Some("now take the hiss out"));
+        let args = json!({ "ids": ["tilt"] }).to_string();
+        let ask = json!({ "choices": [{ "message": { "role": "assistant", "content": null,
+            "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": DESCRIBE_TOOL, "arguments": args } }] } }] });
+        let more = build_expansion(&req, &ask, &["tilt".to_string()]).unwrap();
+        assert_eq!(words_of(&more).as_deref(), Some("now take the hiss out"));
+        assert_eq!(words_of(&json!({ "messages": [] })), None);
     }
 }

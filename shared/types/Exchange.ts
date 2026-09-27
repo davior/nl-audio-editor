@@ -24,4 +24,8 @@ corrects?: string | null,
 /**
  * The exchange whose `describe_operations` call this one answers.
  */
-describes?: string | null, };
+describes?: string | null, 
+/**
+ * The `speech.transcribed` event (its hash), when the request was spoken.
+ */
+dictation?: string | null, };

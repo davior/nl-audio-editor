@@ -6,6 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { importClip, logged, nlae, say, start, whereStored } from "./helpers";
 import { DG_KEY_PREFIX, DG_URL, handshakesSeen, scriptDeepgram, seenByDeepgram } from "./mock-deepgram";
+import { MOCK_URL } from "./mock-model";
 
 /** A key of each test's own, so its script and streams are its own. */
 const keyFor = (name: string) => `${DG_KEY_PREFIX}${name}-${Math.random().toString(36).slice(2, 10)}`;
@@ -54,7 +55,7 @@ test("1. dictated words fill the box as they are recognised, are corrected and s
   await expect(turn).toHaveAttribute("data-status", "applied");
   await expect(turn).toHaveAttribute("data-via", "local");
   await expect(turn).toHaveAttribute("data-spoken", "yes");
-  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "band_cut");
+  await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "band_cut");
 
   // What was heard and what was sent are logged first; the applied step refers to them.
   const [spoken] = await logged(page, "speech.transcribed");
@@ -232,4 +233,47 @@ test("6. Escape while the stream is still opening abandons it: nothing is stream
   await expect(page.getByTestId("play")).toBeEnabled();
   const streams = await seenByDeepgram(key);
   expect(streams.reduce((n, s) => n + s.audioBytes, 0)).toBe(0);
+});
+
+test("7. a spoken question the model answers in words keeps its words, its answer and its mark when the project is opened again", async ({
+  page,
+}) => {
+  const key = keyFor("question");
+  await scriptDeepgram(key, { finals: ["Who is speaking loudest?"] });
+  await start(page);
+  await importClip(page);
+  // The stand-in model and the stand-in recogniser, in one visit to the settings.
+  await page.getByTestId("assistant-settings").click();
+  await page.getByTestId("settings-preset").selectOption("custom");
+  await page.getByTestId("settings-url").fill(MOCK_URL);
+  await page.getByTestId("settings-model").fill("mock-1");
+  await page.getByTestId("settings-provider").fill("mock");
+  await page.getByTestId("settings-key").fill("sk-nlae-e2e-question");
+  await page.getByTestId("speech-url").fill(DG_URL);
+  await page.getByTestId("speech-key").fill(key);
+  await page.getByTestId("settings-save").click();
+  await expect(page.getByTestId("settings")).toHaveCount(0);
+
+  await mic(page).click();
+  await expect(box(page)).toHaveValue("Who is speaking loudest?");
+  await expect(mic(page)).toHaveAttribute("data-state", "off");
+  await box(page).press("Enter");
+  const turn = page.getByTestId("turn").first();
+  await expect(turn).toHaveAttribute("data-status", "reply");
+  await expect(turn).toHaveAttribute("data-spoken", "yes");
+
+  // The exchange names what was heard.
+  const [spoken] = await logged(page, "speech.transcribed");
+  const [ex] = await logged(page, "assistant.exchange");
+  expect(ex.data.dictation).toBe(spoken.hash);
+
+  await page.reload();
+  await page.waitForFunction(() => window.__nlae?.ready === true);
+  const again = page.getByTestId("turn");
+  await expect(again).toHaveCount(1);
+  await expect(again).toHaveAttribute("data-status", "reply");
+  await expect(again).toHaveAttribute("data-spoken", "yes");
+  await expect(again.locator(".you")).toHaveText("Who is speaking loudest?");
+  await expect(again.locator(".via")).toHaveText("spoken · via mock · mock-1");
+  await expect(again.getByTestId("turn-text")).toContainText("Which part of the recording");
 });

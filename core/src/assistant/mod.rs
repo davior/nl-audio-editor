@@ -5,11 +5,13 @@
 //! passes through here. Spoken requests are transcribed the same way
 //! ([`speech`]): the core sets what the stream asks for and logs the result.
 
+pub mod history;
 pub mod parse;
 pub mod prompt;
 pub mod route;
 pub mod speech;
 
+pub use history::{requests, LoggedRequest, Via};
 pub use parse::{parse_response, Proposal, ProposedStep};
 pub use prompt::{
     build_correction, build_expansion, build_request, AssistantContext, Turn, DESCRIBE_TOOL,
@@ -50,6 +52,9 @@ pub struct Exchange {
     /// The exchange whose `describe_operations` call this one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub describes: Option<String>,
+    /// The `speech.transcribed` event (its hash), when the request was spoken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictation: Option<String>,
 }
 
 /// Rounds already taken for one request.
@@ -145,6 +150,7 @@ pub fn record_exchange<S: Store>(
     let request: Value = serde_json::from_str(&ex.request)
         .map_err(|e| ProjectError::Invalid(format!("the request is not JSON: {e}")))?;
     prompt::check_no_audio(&request).map_err(ProjectError::Invalid)?;
+    project.check_dictation(ex.dictation.as_deref())?;
     let mut data = json!({
         "provider": ex.provider,
         "model": ex.model,
@@ -163,6 +169,9 @@ pub fn record_exchange<S: Store>(
     }
     if let Some(d) = &ex.describes {
         data["describes"] = json!(d);
+    }
+    if let Some(d) = &ex.dictation {
+        data["dictation"] = json!(d);
     }
     let ev = project.record(
         env,
@@ -234,6 +243,7 @@ mod tests {
                 problems: Some(problems.clone()),
                 corrects: None,
                 describes: None,
+                dictation: None,
             },
         )
         .unwrap();
@@ -252,6 +262,7 @@ mod tests {
                 problems: None,
                 corrects: Some(first.clone()),
                 describes: None,
+                dictation: None,
             },
         )
         .unwrap();
@@ -396,6 +407,7 @@ mod tests {
                 problems: None,
                 corrects: None,
                 describes: None,
+                dictation: None,
             },
         )
         .unwrap();
@@ -412,6 +424,7 @@ mod tests {
                 problems: None,
                 corrects: None,
                 describes: Some(first.clone()),
+                dictation: None,
             },
         )
         .unwrap();
@@ -441,6 +454,7 @@ mod tests {
                 problems: None,
                 corrects: None,
                 describes: None,
+                dictation: None,
             },
         );
         assert!(r.is_err());

@@ -1029,7 +1029,7 @@ impl<S: Store> Project<S> {
     }
 
     /// A spoken request named by a preview or an application must be in the log.
-    fn check_dictation(&self, dictation: Option<&str>) -> Result<()> {
+    pub(crate) fn check_dictation(&self, dictation: Option<&str>) -> Result<()> {
         if let Some(h) = dictation {
             let logged = self
                 .log
