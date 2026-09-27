@@ -5,8 +5,9 @@
 Six layers with clean boundaries. The interface holds no audio logic.
 
 1. **Presentation** (`frontend/`, TypeScript + React) — waveform and spectrogram lanes,
-   transport, time and time × frequency selection, console, stack panel, clone family view,
-   log viewer, generated operation panels. Draws only what the core returns.
+   transport, time and time × frequency selection, the stack with the console (one list),
+   clone family view, log viewer, generated operation panels. Draws only what the core
+   returns.
 2. **DSP and analysis core** (`core/src/dsp`, `core/src/analysis`, `core/src/ops`) — STFT,
    features, operation implementations. Deterministic, driven only by typed, validated
    descriptors.

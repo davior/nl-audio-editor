@@ -325,6 +325,34 @@ renders in 0.9 s natively, about as fast as a bell or `hum_reduce`, and faster t
   (processed, not factual)", and the logged step has class `creative` and ratio 1.122462 (all
   26 tests pass, 2026-09-27).
 
+### The stack and the console as one list
+
+**In Rust** (`core/tests/requests.rs`), requests rebuilt from a log holding:
+- a routed request, a recipe, the model corrected once, and the model asking to see an
+  operation first;
+- a spoken question answered in words, and an answer that could not be used even corrected;
+- a spoken request, then undone.
+
+Each comes back once, in order, with its words, how it was answered, its answer, its steps and
+where it starts in the log (its dictation, or its first exchange). They are the same after
+reopening, and every event matches the event schema. Previewed and accepted, a proposal is one
+request; previewed and rejected, it stays an answer with nothing on the stack. A clone inherits
+steps, not requests. An exchange naming a dictation that is not logged is refused, and the
+words are read back from a request, its correction and its expansion.
+
+**In the browser** (`views/history.test.ts`): steps grouped under their requests and numbered
+by their place; a request of the session shown until the log answers it, then the logged one in
+the same place, never both and never neither; turns that logged nothing kept in the order made;
+*Steps only*.
+
+**End to end** (all 28 pass, 2026-09-27). The earlier scenarios check each request's steps
+under it, where they checked the *Applied* card.
+
+| # | Scenario | Checks |
+|---|---|---|
+| 10 | One list, reopened | A local request, one to the model and a question. Each step sits under its request, numbered by its place, and is removed there. *Steps only* leaves out the question and the listening. Reloaded, the three requests come back from the log as they were, the removed step with them, and it is restored from the list |
+| Speech 7 | A spoken question | Answered in words by the model. The exchange names the dictation, and after a reload the request is still marked spoken, with its answer |
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the
