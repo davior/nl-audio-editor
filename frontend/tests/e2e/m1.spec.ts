@@ -273,3 +273,23 @@ test("8. an operation the model sees only in the index is described when it asks
     actor: { model: "mock-1", provider: "mock" },
   });
 });
+
+test("9. “raise the pitch by 2 semitones” is shifted at once and labelled as altered, not factual", async ({ page }) => {
+  await start(page);
+  await importClip(page);
+  const turn = await say(page, "raise the pitch by 2 semitones");
+  await expect(turn).toHaveAttribute("data-via", "local");
+  await expect(turn).toHaveAttribute("data-status", "applied");
+  const step = turn.getByTestId("applied-step");
+  await expect(step).toHaveAttribute("data-op", "pitch_shift");
+  await expect(step).toContainText("+2.00 semitones (×1.1225), formants kept");
+  await expect(step.getByTestId("measurements")).not.toBeEmpty();
+  const stacked = page.getByTestId("stack-step");
+  await expect(stacked).toHaveCount(1);
+  await expect(stacked).toContainText("altered (processed, not factual)");
+  const [applied] = await logged(page, "step.applied");
+  const s = (applied.data.steps as { class: string; label: string; resolved: Record<string, unknown> }[])[0];
+  expect(s.class).toBe("creative");
+  expect(s.label).toBe("altered (processed, not factual)");
+  expect(s.resolved).toEqual({ semitones: 2, preserve_formants: true, ratio: 1.122462 });
+});

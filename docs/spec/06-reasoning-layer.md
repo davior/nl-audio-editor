@@ -80,8 +80,8 @@ model keeps coping as the catalogue grows:
   `dc_remove`, `compressor`, `noise_reduce`, `line_reduce`, `band_cut`,
   `spectral_compressor`, `remove_time`, `insert_silence`.
 - **On demand:** the rest (currently the eight added in M2: `high_pass`, `low_pass`, `bell`,
-  `shelf`, `tilt`, `gate`, `loudness_normalise`, `hum_reduce`) appear only in the index, one
-  line each: id, title and summary. `describe_operations` (`ids`: one to eight of them) asks
+  `shelf`, `tilt`, `gate`, `loudness_normalise`, `hum_reduce`; and `pitch_shift`) appear only
+  in the index, one line each: id, title and summary. `describe_operations` (`ids`: one to eight of them) asks
   to see their parameters.
 - A `plan` tool proposes several operations to be previewed and accepted together; its enum
   names every operation offered, core or on demand.
@@ -115,6 +115,7 @@ predictable. It is deterministic and tested with a table of cases.
 | "boost the bass by 3 dB", "cut the treble above 5 kHz by 4 dB" | `shelf` (low at 200 Hz, high at 4 kHz, unless a corner is named) |
 | "brighter by 1.5 dB per octave", "darker by 1 dB per octave" | `tilt` around 1 kHz |
 | "gate the pauses", "gate below −50 dB" | `gate` (6 dB above the noise floor when no threshold is given) |
+| "raise the pitch by 2 semitones", "pitch down an octave", "transpose up 30 cents", "pitch up a semitone and the formants too" | `pitch_shift` (formants kept unless the words move them); "pitch" or "transpose" with no amount, or "make the voice deeper", goes to the model |
 | "compress the bangs here", "tame the whine in this area" | `spectral_compressor` on the selected area (transient, tonal or level mode from the words) |
 | "remove 12 to 15.5 seconds", "cut from 1:20 to 1:35", "trim the first 5 seconds" | `remove_time` for that stretch |
 | "remove this part", "cut the selection out" (with a time selection, naming nothing to process) | `remove_time` for the selected stretch |

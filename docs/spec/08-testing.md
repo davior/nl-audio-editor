@@ -284,6 +284,47 @@ above, 24 tests in about 85 s):
 |---|---|---|
 | 8 | "make it brighter" | The stand-in model first asks to see `tilt`, then proposes a tilt. Two exchanges are logged at prompt version 2: the first request offers `describe_operations` and not `tilt`; the second offers `tilt` and `describes` the first. The preview refers to the second. Once accepted, the step's actor is the model |
 
+### Pitch shift (brought forward from M3)
+
+**Invariants.** `pitch_shift` joins the invariant tests: at 0 semitones it is bit-identical;
+it leaves everything outside a time-range scope bit-identical; previews equal the full render,
+on its own and in the chain; renders are deterministic. The registry now holds 21 descriptors
+for 20 operations. More than 12 semitones either way, a missing shift or a shift that is not a
+number are refused.
+
+**The finite reach** (`ops/pitch.rs`): a 6 s clip with pauses in three cells puts three
+restarts inside it; windows around each (6,000 samples across it, the single samples on either
+side of it, and windows starting 700 samples after or ending 39,000 before it) are
+bit-identical to the full render, in stereo. A restart falls in a 100 ms pause.
+
+**On signals with a known answer** (2026-09-27, 48 kHz):
+
+| Test | Target | Measured |
+|---|---|---|
+| A 440 Hz tone, −12 … +12 semitones, measured between restarts | within 0.01 Hz; level within 0.5 dB; the original ≥ 40 dB down | within 0.0004 Hz; level −0.07 to −0.29 dB; original −93 to −124 dB down (−54 dB at +2) |
+| Harmonics of 140 Hz with a 2 % vibrato under three formants, against the same signal made at the new pitch | log-spectral distance < 4 dB, under a third of the unshifted signal's and half of the formants-moved one's | −5 st: 2.48 dB (unshifted 14.15, formants moved 8.58); +3 st: 3.52 dB (15.36, 7.74) |
+| Harmonics of 150 Hz under a formant at 1 kHz, +4 semitones | the loudest harmonic stays at the formant, or moves with the pitch when the formants move | 945 Hz kept (1,000 Hz); with the formants moved, at 1,260 Hz |
+| Left and right in opposite polarity | output channels exact negatives | bit-exact |
+| A 0.1 DC offset under a tone, +5 semitones | the mean kept within 0.001 | 0.0995 |
+| Components rendered with the mixture's decisions | sum to the mixture's render | within −162.6 dB |
+
+A scratch comparison (not kept as a test) found no measurable cost to the restarts on the
+golden voices: the same distance from an unbounded vocoder with cells of 1 s, 2 s or none. A
+pure tone can dip by up to 11 dB for one overlap at a restart. At 48 kHz one minute of mono
+renders in 0.9 s natively, about as fast as a bell or `hum_reduce`, and faster than
+`noise_reduce` (1.7 s) or `spectral_compressor` (3.4 s).
+
+- **Router:** "raise the pitch by 2 semitones", "Lower the pitch 3.5 semitones.", "pitch shift
+  −1 semitone", "pitch down an octave", "transpose up 30 cents", "pitch up a semitone and the
+  formants too", "shift the pitch down by minus 2 semitones". "Raise the pitch" (no amount) and
+  "make the voice deeper" go to the model.
+- **Parity:** the chain now also shifts 0.4–5.6 s down 1.5 semitones, after the gate. The
+  re-pinned hashes match natively and in WebAssembly.
+- **End to end:** "raise the pitch by 2 semitones" is routed locally and applied at once; the
+  console shows "+2.00 semitones (×1.1225), formants kept", the stack labels the step "altered
+  (processed, not factual)", and the logged step has class `creative` and ratio 1.122462 (all
+  26 tests pass, 2026-09-27).
+
 ## Proposed: control replay (M3)
 
 To show that something "brought out" by processing is in the recording rather than made by the

@@ -52,7 +52,9 @@ From the brief (non-negotiable):
    range values are rejected, not clamped. There is no bypass.
 8. A **limiter is always last** in the chain.
 9. Reconstruction-class work (separation, synthesis, heavy spectral repair) is labelled
-   **processed, not factual** everywhere it is recorded or exported.
+   **processed, not factual** everywhere it is recorded or exported. *(Creative-class work,
+   which alters what was recorded — a pitch shift — is labelled the same way: "altered
+   (processed, not factual)". See `docs/decisions.md`.)*
 10. Every step is logged with its **parameters, measurements, rationale and actor**.
 
 Added by this specification:
