@@ -48,6 +48,7 @@ function summary(p: WasmProject): ProjectSummary {
     state: p.state(),
     readOnly: p.read_only() ?? null,
     needsAnalysis: p.needs_analysis(),
+    requests: p.requests(),
   };
 }
 

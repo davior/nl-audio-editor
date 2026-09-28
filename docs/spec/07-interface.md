@@ -10,8 +10,8 @@ one project is one stack; different streams of work are clones, not layers.
 - **Library** — projects grouped by source, each source's clones shown as a family tree (fork
   step on each branch). Import (file picker or drag-and-drop, WAV or MP3), record, open a
   `.nlae` bundle.
-- **Editor** — the lanes, transport, selection, console, stack panel, log viewer, integrity
-  badge and residual monitor.
+- **Editor** — the lanes, transport, selection, the stack with the console at its foot (one
+  list), log viewer, integrity badge and residual monitor.
 
 ## Lanes
 
@@ -34,7 +34,23 @@ one project is one stack; different streams of work are clones, not layers.
 Play, pause, stop, click to seek, play selection, loop. Playback at the file's native sample
 rate (the browser resamples only for output).
 
-## Stack panel
+## The stack
+
+**One list with the console** (chosen by the product owner, 2026-09-27): the console and the
+stack showed the same steps twice, with different controls. They are one list, in the order
+the requests were made, which is the stack's order, since a request's steps go on top:
+- each request: the words, how it was answered (handled here or by which model; spoken or
+  typed) and the answer, then the steps it put on the stack, numbered by their place;
+- every control is on the step: select to change its values and hear it on its own, ×,
+  *Restore*, *Clone here*; *Undo*, *Redo*, *Clone current* and the rating are the list's own;
+- a request that put nothing on the stack (an answer in words, one that could not be used) is
+  listed where it happened, and *Steps only* hides it;
+- a clone's inherited steps come first, under the parent's name.
+
+The requests are rebuilt from the log (`assistant::requests`): a step's event names the
+exchange and the dictation it came from; an exchange names the one it corrects or follows, and
+its dictation. So the list is the same when the project is opened again. What logged nothing
+(listening, a typed *undo*, an error before anything was sent) lasts only for the session.
 
 The stack's steps, projected from the log, each with:
 - its operation and key values;
@@ -61,7 +77,8 @@ applied. A 1–5 rating of the stack as it stands is logged as `stack.rated`.
 
 Chosen by the product owner, 2026-09-26: a request applies at once, and the stack is where
 changes are reviewed, pruned and tuned. In the browser:
-- A request applies its steps to the whole recording. The console shows an *Applied* card:
+- A request applies its steps to the whole recording. The console shows an *Applied* card
+  (since 2026-09-27, the request is listed in the stack with its steps under it):
   - each operation, its scope and key values;
   - its measurements over the whole recording;
   - the model's explanation;
@@ -74,12 +91,13 @@ changes are reviewed, pruned and tuned. In the browser:
 
 **As built** (in the core, the command line — `nlae ask --apply`, `remove`, `restore`, `edit`,
 `remeasure`, `undo`, `redo` — and the browser):
-- **The console** applies each request at once and shows an *Applied* card. *change* opens the
-  step in the stack; *Undo* is offered while the request is the last change.
-- **The stack panel** lists every step in its place:
+- **The console** applies each request at once. The request is listed in the stack with its
+  steps under it (see *One list with the console*); the *Applied* card, with its *change* and
+  *Undo*, is gone.
+- **The stack** lists every step in its place, under the request that made it:
   - × removes a step, with an optional reason; the step stays, greyed and struck through, and
     *Restore* brings it back;
-  - *Undo* and *Redo* in the panel's head name the change they take back or repeat;
+  - *Undo* and *Redo* in the list's head name the change they take back or repeat;
   - an *edited* tag marks a changed step, and a *measured before a change* badge a drifted one.
 - **The step editor** opens when a step's name is clicked. It is generated from the operation's
   descriptor, and *Apply* sends only the values that changed. For a drifted step it shows what

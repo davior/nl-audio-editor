@@ -603,9 +603,17 @@ tr.unverified td {
   }
 }
 
-/* The console */
+/* The stack and the console, one list */
 .console {
   margin-bottom: 12px;
+}
+
+.console .head-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .console .turns {
@@ -615,6 +623,8 @@ tr.unverified td {
   max-height: 60vh;
   overflow-y: auto;
   margin-bottom: 8px;
+  /* Room for a selected step's outline inside the scrolling list. */
+  padding: 4px 5px 4px 0;
 }
 
 .turn {
@@ -659,21 +669,17 @@ tr.unverified td {
   color: var(--good);
 }
 
-.proposal {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 6px 8px;
+/* A request's steps, under it. */
+.turn .steps {
   margin-top: 6px;
 }
 
-.proposal-step {
-  padding: 4px 0;
-  border-bottom: 1px solid var(--line);
+.turn .steps li:last-child {
+  margin-bottom: 0;
 }
 
-.proposal-step.off {
-  opacity: 0.45;
+.turn.inherited {
+  border-color: var(--muted);
 }
 
 .param-editor {

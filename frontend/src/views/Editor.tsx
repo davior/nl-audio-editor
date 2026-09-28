@@ -1,4 +1,4 @@
-// One project: lanes, transport, monitor, view, stack, log, clone and bundle.
+// One project: lanes, transport, monitor, view, the stack with the console, log, clone and bundle.
 // Everything here is display and control; the core does the audio work.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
@@ -11,8 +11,8 @@ import { IntegrityBadge } from "./IntegrityBadge";
 import { Spectrogram, TimeAxis, Waveform } from "./Lanes";
 import { LogViewer, type LogFailure } from "./LogViewer";
 import { Console } from "./Console";
-import { StackPanel, type StackActions } from "./StackPanel";
 import { useDescriptors } from "./StepEditor";
+import type { StackActions } from "./StepRow";
 import { DB_RANGES, fit, follow, restoreView, scroll, showRange, zoom } from "./viewState";
 
 export interface EditorProps {
@@ -806,27 +806,25 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
         unavailable={consoleUnavailable}
         onSummary={onChanged}
         onListen={listen}
-        onSelectStep={setSelected}
-        onError={onError}
         save={save}
         request={consoleRequest}
         onDictating={onDictating}
+        stack={{
+          actions,
+          busy: !!busy,
+          selected,
+          onSelect: setSelected,
+          descriptors,
+          onClone: clone,
+          canClone: !readOnly && !busy,
+          onRate: readOnly || busy ? undefined : rate,
+          output: editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null,
+          brokenAtLine: failure ? Number(failure.line) : null,
+          inheritedFrom: lineage?.parent_name,
+        }}
       />
 
       <div className="panels">
-        <StackPanel
-          state={summary.state}
-          onClone={clone}
-          canClone={!readOnly && !busy}
-          brokenAtLine={failure ? Number(failure.line) : null}
-          actions={actions}
-          busy={!!busy}
-          selected={selected}
-          onSelect={setSelected}
-          descriptors={descriptors}
-          onRate={readOnly || busy ? undefined : rate}
-          output={editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null}
-        />
         <div className="panel">
           <div className="panel-head">
             <h3>Record</h3>

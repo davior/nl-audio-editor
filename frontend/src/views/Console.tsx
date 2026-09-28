@@ -1,34 +1,22 @@
-// The console: say what you want, typed or spoken. Routine requests are
-// handled locally; the rest go to the chosen model with words and analysis
-// numbers only. A request applies at once, to the whole recording; the stack
-// is where it is reviewed: any step can be removed, restored or changed, and
-// undone or redone. Spoken words fill the box as they are recognised and are
-// sent, like typed ones, with Enter; what was heard is logged next to what
-// was sent.
+// The stack and the console, one list: say what you want, typed or spoken,
+// and each request is listed with the steps it put on the stack under it.
+// Routine requests are handled locally; the rest go to the chosen model with
+// words and analysis numbers only. A request applies at once, to the whole
+// recording, and is reviewed in place: any step can be removed, restored or
+// changed, and undone or redone. The requests are rebuilt from the log, so the
+// list is the same when the project is opened again. Spoken words fill the
+// box as they are recognised and are sent, like typed ones, with Enter; what
+// was heard is logged next to what was sent.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compose, Listening, loadSpeechConfig, SPEECH_PROVIDER, type Listened } from "../assistant/dictation";
 import { complete, loadConfig, type ProviderConfig } from "../assistant/provider";
 import { core } from "../core/client";
-import type { AppliedResult, ProjectSummary, Segment, Selection, Step, Turn, Which } from "../core/types";
+import type { AppliedResult, LoggedRequest, ProjectSummary, Segment, Selection, Turn, Which } from "../core/types";
 import { debug } from "../debug";
+import { buildRows, nextAfter, type Placed, type SessionTurn } from "./history";
 import { Settings } from "./Settings";
-import { changeWords, describe, stepOf } from "./StackPanel";
-
-interface ConsoleTurn {
-  id: number;
-  words: string;
-  via: "local" | "model" | null;
-  /** The model asked, when one was. */
-  model?: string;
-  status: "working" | "applied" | "reply" | "done" | "error";
-  text?: string;
-  problems?: string[];
-  /** The steps the request applied, as recorded. */
-  applied?: Step[];
-  outcome?: string;
-  /** The words were dictated (possibly changed before sending). */
-  spoken?: boolean;
-}
+import type { Descriptor } from "./StepEditor";
+import { changeWords, stepOf, StepRow, type StackActions } from "./StepRow";
 
 /** The dictation behind the words in the box, until they are sent or cleared. */
 interface Spoken {
@@ -47,123 +35,67 @@ type Mic = "off" | "starting" | "listening" | "finishing";
 const MAX_LISTEN_MS = 30_000;
 const NO_SPEECH_MS = 8_000;
 
+/** The stack's side of the list: its steps' controls, and the project's. */
+export interface StackProps {
+  actions?: StackActions;
+  /** Something else is changing the project. */
+  busy: boolean;
+  /** The selected step, if any: its values can be changed, and it can be heard on its own. */
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  descriptors: Descriptor[];
+  onClone: (atStep?: string) => void;
+  canClone: boolean;
+  /** Rate the stack as it stands, 1–5. */
+  onRate?: (overall: number) => void;
+  /** With time edits: the output's length and the original's (seconds). */
+  output?: { duration: number; original: number } | null;
+  /** When the log did not verify: only what was recorded before this line is listed. */
+  brokenAtLine: number | null;
+  /** A clone's parent, whose steps it inherited. */
+  inheritedFrom?: string;
+}
+
 interface Props {
   summary: ProjectSummary;
   selection: Selection | null;
-  /** Why the console cannot be used right now, if it cannot. */
+  /** Why no request can be made right now, if none can. */
   unavailable: string | null;
   onSummary: (s: ProjectSummary) => void;
   onListen: (which: Which) => void;
-  /** Select a step in the stack (to change its values, or listen to it). */
-  onSelectStep: (id: string) => void;
-  onError: (e: unknown) => void;
   save: () => Promise<void>;
   /** A request made with a button elsewhere; handled as if typed (each new `n` once). */
   request?: { words: string; n: number } | null;
   /** The microphone opened (true) or closed: playback pauses meanwhile, so no recording is streamed. */
   onDictating: (on: boolean) => void;
+  stack: StackProps;
 }
 
-function scopeWords(s: Step["scope"]): string {
-  switch (s.kind) {
-    case "clip":
-      return "whole recording";
-    case "time_range":
-      return `${s.t0.toFixed(2)}–${s.t1.toFixed(2)} s`;
-    case "band":
-      return `${s.f_lo.toFixed(0)}–${s.f_hi.toFixed(0)} Hz`;
-    case "tf_patch":
-      return `${s.t0.toFixed(2)}–${s.t1.toFixed(2)} s × ${s.f_lo.toFixed(0)}–${s.f_hi.toFixed(0)} Hz`;
-  }
+/** How a request was answered, in a line: spoken, handled here or by which model. */
+function viaWords(r: LoggedRequest): string {
+  const how =
+    r.via === "model"
+      ? `via ${[r.provider, r.model].filter(Boolean).join(" · ")}`
+      : r.origin === "cli"
+        ? "from the command line"
+        : r.origin === "panel"
+          ? "made by hand"
+          : "handled here";
+  return `${r.spoken ? "spoken · " : ""}${how}`;
 }
 
-function measurementText(m: Record<string, unknown>): string {
-  return Object.entries(m)
-    .filter(([, v]) => typeof v === "number")
-    .slice(0, 4)
-    .map(([k, v]) => `${k.replace(/_/g, " ")} ${(v as number).toFixed(2)}`)
-    .join(" · ");
+/** The answer to a logged request, in words. */
+function answerWords(r: LoggedRequest, applied: boolean): string | null {
+  if (r.problems?.length) return "The model's proposal could not be used.";
+  if (r.recipe) return `The built-in ${r.recipe} recipe, measured on this recording.`;
+  if (r.text) return r.text;
+  return applied ? null : "No answer was recorded.";
 }
 
-/** What a request applied: each step, measured over the whole recording. */
-function AppliedCard({
-  turn,
-  state,
-  busy,
-  onUndo,
-  onSelectStep,
-}: {
-  turn: ConsoleTurn;
-  state: ProjectSummary["state"];
-  busy: boolean;
-  onUndo: () => void;
-  onSelectStep: (id: string) => void;
-}) {
-  const steps = turn.applied!;
-  const ids = steps.map((s) => s.step_id);
-  // Undo here while this is still the last change to the stack.
-  const last = state.undo[state.undo.length - 1];
-  const isLast = !!last && last.kind === "applied" && last.step_ids.length === ids.length && ids.every((id) => last.step_ids.includes(id));
-  return (
-    <div className="proposal applied" data-testid="applied">
-      {steps.map((s) => {
-        const entry = state.entries.find((e) => e.step_id === s.step_id);
-        const now = stepOf(state, s.step_id) ?? s;
-        return (
-          <div
-            key={s.step_id}
-            className={`proposal-step ${entry?.active === false ? "off" : ""}`}
-            data-testid="applied-step"
-            data-op={s.op}
-          >
-            <div className="step-top">
-              <span className="op">{s.op}</span>
-              <span className="label">{scopeWords(s.scope)}</span>
-              {entry?.active === false ? (
-                <span className="tag">removed</span>
-              ) : (
-                <button
-                  className="small"
-                  onClick={() => onSelectStep(s.step_id)}
-                  data-testid="edit-applied"
-                  title="Change its values in the stack"
-                >
-                  change
-                </button>
-              )}
-            </div>
-            <div className="step-desc">{describe(now)}</div>
-            <div className="step-meta" data-testid="measurements">
-              {measurementText(now.measurements as Record<string, unknown>)}
-            </div>
-          </div>
-        );
-      })}
-      {isLast && (
-        <div className="editor-actions">
-          <button disabled={busy} onClick={onUndo} data-testid="undo-applied" title="Take it off the stack (it stays in the log)">
-            Undo
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function Console({
-  summary,
-  selection,
-  unavailable,
-  onSummary,
-  onListen,
-  onSelectStep,
-  onError,
-  save,
-  request,
-  onDictating,
-}: Props) {
+export function Console({ summary, selection, unavailable, onSummary, onListen, save, request, onDictating, stack }: Props) {
   const id = summary.id;
-  const [turns, setTurns] = useState<ConsoleTurn[]>([]);
+  const [turns, setTurns] = useState<SessionTurn[]>([]);
+  const [stepsOnly, setStepsOnly] = useState(false);
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const next = useRef(1);
@@ -187,28 +119,39 @@ export function Console({
     () =>
       debug(
         "console",
-        turns.map((t) => ({ words: t.words, via: t.via, status: t.status, outcome: t.outcome })),
+        turns.map((t) => ({ words: t.words, via: t.via, status: t.status })),
       ),
     [turns],
   );
 
-  // The latest turn stays in view.
+  const { state, requests } = summary;
+  const rows = buildRows(state.entries, requests, turns, stepsOnly);
+
+  // The latest request stays in view; changing a step higher up does not move the list.
   useEffect(() => {
     const el = turnsEl.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [turns]);
+  }, [rows.length]);
 
-  const update = (tid: number, patch: Partial<ConsoleTurn>) => setTurns((ts) => ts.map((t) => (t.id === tid ? { ...t, ...patch } : t)));
+  const update = (tid: number, patch: Partial<SessionTurn>) => setTurns((ts) => ts.map((t) => (t.id === tid ? { ...t, ...patch } : t)));
 
   const history: Turn[] = turns
     .filter((t) => t.status !== "working")
     .flatMap((t) => [{ role: "user", text: t.words }, ...(t.text ? [{ role: "assistant", text: t.text }] : [])]);
 
-  const showApplied = async (tid: number, r: AppliedResult, via: "local" | "model", text?: string) => {
+  // The logged request takes the turn's place in the same update (see `buildRows`).
+  const showApplied = async (tid: number, r: AppliedResult, via: "local" | "model", keys: string[], text?: string) => {
     await save();
     onSummary(r.summary);
-    update(tid, { status: "applied", applied: r.steps, via, text });
+    update(tid, { status: "applied", via, text, keys: [...keys, r.steps[0].step_id] });
     onListen("stack");
+  };
+
+  /** An answer that put nothing on the stack; the log has it. */
+  const showAnswered = async (tid: number, patch: Partial<SessionTurn>) => {
+    await save();
+    onSummary(await core.summary(id));
+    update(tid, patch);
   };
 
   /** Take back the last change to the stack, or repeat the last one taken back. */
@@ -356,7 +299,10 @@ export function Console({
     // Words from the box may have been dictated; a request made with a button was not.
     const dictated = text === undefined ? spoken.current : null;
     if (text === undefined) spoken.current = null;
-    setTurns((ts) => [...ts, { id: tid, words: w, via: null, status: "working", spoken: !!dictated }]);
+    setTurns((ts) => [
+      ...ts,
+      { id: tid, words: w, via: null, status: "working", spoken: !!dictated, after: nextAfter(requests), keys: [] },
+    ]);
     if (text === undefined) setWords("");
     setBusy(true);
     try {
@@ -391,6 +337,7 @@ export function Console({
           tid,
           await core.applyRecipe(id, route.name, w, dictation),
           "local",
+          [],
           `The built-in ${route.name} recipe, measured on this recording.`,
         );
       } else if (route.route === "steps") {
@@ -398,6 +345,7 @@ export function Console({
           tid,
           await core.applyRouted(id, route.steps, w, dictation),
           "local",
+          [],
           route.steps.map((s) => s.understood).join(" "),
         );
       } else {
@@ -408,6 +356,8 @@ export function Console({
         let body = await core.assistantRequest(id, config.model, history, w, selection);
         const rounds = { described: false, corrected: false };
         let link: { corrects?: string; describes?: string } = {};
+        // Every exchange of this request, as the log names them.
+        const keys: string[] = [];
         for (;;) {
           const { response, latencyMs, host } = await complete(config, body);
           const next = await core.nextRound(body, JSON.stringify(response), rounds);
@@ -419,8 +369,11 @@ export function Console({
             response,
             latency_ms: latencyMs,
             problems: next.next === "correct" || next.next === "failed" ? next.problems : null,
+            dictation,
             ...link,
           });
+          keys.push(exchange);
+          update(tid, { keys: [...keys] });
           if (next.next === "describe") {
             rounds.described = true;
             link = { describes: exchange };
@@ -435,16 +388,15 @@ export function Console({
             continue;
           }
           if (next.next === "failed") {
-            await save();
-            update(tid, { status: "error", problems: next.problems, text: "The model's proposal could not be used." });
+            await showAnswered(tid, { status: "error", problems: next.problems, text: "The model's proposal could not be used." });
           } else if (next.proposal.steps.length === 0) {
-            await save();
-            update(tid, { status: "reply", text: next.proposal.text ?? "" });
+            await showAnswered(tid, { status: "reply", text: next.proposal.text ?? "" });
           } else {
             await showApplied(
               tid,
               await core.applyProposal(id, next.proposal, w, config.model, config.provider, exchange, dictation),
               "model",
+              keys,
               next.proposal.text ?? undefined,
             );
           }
@@ -464,72 +416,194 @@ export function Console({
     if (request) void askRef.current(request.words);
   }, [request]);
 
-  const undoHere = async () => {
-    setBusy(true);
-    try {
-      await undoOrRedo("undo");
-    } catch (e) {
-      onError(e);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { actions, selected, onSelect, descriptors, onClone, canClone, onRate, output, brokenAtLine, inheritedFrom } = stack;
+  const stackBusy = stack.busy || busy;
+  const lastUndo = state.undo[state.undo.length - 1];
+  const lastRedo = state.redo[state.redo.length - 1];
+  const removed = state.entries.length - state.steps.length;
+
+  const stepList = (placed: Placed[], meta = false) => (
+    <ol className="steps">
+      {placed.map(({ entry, n }) => {
+        const s = stepOf(state, entry.step_id);
+        return (
+          s && (
+            <StepRow
+              key={s.step_id}
+              n={n}
+              step={s}
+              entry={entry}
+              actions={actions}
+              busy={stackBusy}
+              selected={selected === s.step_id}
+              onSelect={onSelect}
+              descriptors={descriptors}
+              onClone={onClone}
+              canClone={canClone}
+              meta={meta}
+            />
+          )
+        );
+      })}
+    </ol>
+  );
 
   return (
     <div className="panel console" data-testid="console">
       <div className="panel-head">
-        <h3>Console</h3>
-        <button className="small" onClick={() => setSettingsOpen(true)} data-testid="assistant-settings" title="Provider, model and key">
-          {cfg.model ? `${cfg.provider} · ${cfg.model}` : "choose a model"}
-        </button>
+        <h3>Stack</h3>
+        <div className="head-tools">
+          {actions && (
+            <>
+              <button
+                className="small"
+                disabled={stackBusy || !lastUndo}
+                onClick={actions.undo}
+                data-testid="undo"
+                title={lastUndo ? `Undo ${changeWords(state, lastUndo)} (it stays in the log)` : "Nothing to undo"}
+              >
+                Undo
+              </button>
+              <button
+                className="small"
+                disabled={stackBusy || !lastRedo}
+                onClick={actions.redo}
+                data-testid="redo"
+                title={lastRedo ? `Redo ${changeWords(state, lastRedo)}` : "Nothing to redo"}
+              >
+                Redo
+              </button>
+            </>
+          )}
+          {canClone && (
+            <button className="small" onClick={() => onClone()} data-testid="clone-current" title="Clone the project as it is now">
+              Clone current
+            </button>
+          )}
+          <label className="check small-text" title="List only the requests that put steps on the stack">
+            <input type="checkbox" checked={stepsOnly} onChange={(e) => setStepsOnly(e.target.checked)} data-testid="steps-only" /> Steps
+            only
+          </label>
+          <button className="small" onClick={() => setSettingsOpen(true)} data-testid="assistant-settings" title="Provider, model and key">
+            {cfg.model ? `${cfg.provider} · ${cfg.model}` : "choose a model"}
+          </button>
+        </div>
       </div>
-      <div className="turns" data-testid="turns" ref={turnsEl}>
-        {turns.length === 0 && (
+      {brokenAtLine !== null && (
+        <div className="problem-note" data-testid="stack-partial">
+          Only what was recorded before line {brokenAtLine} of the log is listed; nothing after it can be verified.
+        </div>
+      )}
+      {output && (
+        <div className="output-length" data-testid="output-length">
+          Output {output.duration.toFixed(3)} s (original {output.original.toFixed(3)} s). Removed stretches are shaded on the lanes and
+          skipped when playing <i>Processed</i>.
+        </div>
+      )}
+      <div className="turns" data-testid="stack" ref={turnsEl}>
+        {rows.length === 0 && (
           <p className="muted small-text">
-            Say what you want, e.g. “clean this recording up”, “the hum is distracting”, “cut 3,100 to 3,200 Hz by 12 dB”, or “compress the
-            bangs here” with an area selected. Routine requests are handled here; the rest go to the model with words and analysis numbers
-            only, never audio.
+            No steps yet; the original is untouched. Say what you want, e.g. “clean this recording up”, “the hum is distracting”, “cut 3,100
+            to 3,200 Hz by 12 dB”, or “compress the bangs here” with an area selected. Routine requests are handled here; the rest go to the
+            model with words and analysis numbers only, never audio.
           </p>
         )}
-        {turns.map((t) => (
-          <div
-            key={t.id}
-            className={`turn ${t.status}`}
-            data-testid="turn"
-            data-status={t.status}
-            data-via={t.via ?? ""}
-            data-spoken={t.spoken ? "yes" : "no"}
-          >
-            <div className="you">{t.words}</div>
-            {t.via && (
-              <div className="via">
-                {t.spoken ? "spoken · " : ""}
-                {t.via === "local" ? "handled here" : `via ${t.model}`}
+        {rows.map((row) => {
+          if (row.kind === "inherited")
+            return (
+              <div key={`inherited:${row.steps[0].entry.step_id}`} className="turn inherited" data-testid="inherited">
+                <div className="via">Inherited from {inheritedFrom ?? "the project it was cloned from"}, where they were asked for</div>
+                {stepList(row.steps, true)}
               </div>
-            )}
-            {t.text && (
-              <div className="reply" data-testid="turn-text">
-                {t.text}
+            );
+          if (row.kind === "session") {
+            const t = row.turn;
+            return (
+              <div
+                key={`session:${t.id}`}
+                className={`turn ${t.status}`}
+                data-testid="turn"
+                data-status={t.status}
+                data-via={t.via ?? ""}
+                data-spoken={t.spoken ? "yes" : "no"}
+              >
+                <div className="you">{t.words}</div>
+                {t.via && (
+                  <div className="via">
+                    {t.spoken ? "spoken · " : ""}
+                    {t.via === "local" ? "handled here" : `via ${t.model}`}
+                  </div>
+                )}
+                {t.text && (
+                  <div className="reply" data-testid="turn-text">
+                    {t.text}
+                  </div>
+                )}
+                {t.problems && (
+                  <ul className="problems" data-testid="turn-problems">
+                    {t.problems.map((p, i) => (
+                      <li key={i}>{p}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
-            )}
-            {t.problems && (
-              <ul className="problems" data-testid="turn-problems">
-                {t.problems.map((p, i) => (
-                  <li key={i}>{p}</li>
-                ))}
-              </ul>
-            )}
-            {t.status === "applied" && t.applied && (
-              <AppliedCard turn={t} state={summary.state} busy={busy} onUndo={undoHere} onSelectStep={onSelectStep} />
-            )}
-            {t.outcome && (
-              <div className="outcome" data-testid="turn-outcome">
-                {t.outcome}
-              </div>
-            )}
-          </div>
-        ))}
+            );
+          }
+          const r = row.request;
+          const applied = row.steps.length > 0;
+          const status = applied ? "applied" : r.problems?.length ? "error" : "reply";
+          const answer = answerWords(r, applied);
+          return (
+            <div
+              key={`${r.key}:${row.steps[0]?.n ?? ""}`}
+              className={`turn ${status}`}
+              data-testid="turn"
+              data-status={status}
+              data-via={r.via}
+              data-spoken={r.spoken ? "yes" : "no"}
+            >
+              <div className="you">{r.words || (r.origin === "cli" ? "Applied from the command line" : "Applied")}</div>
+              <div className="via">{viaWords(r)}</div>
+              {answer && (
+                <div className="reply" data-testid="turn-text">
+                  {answer}
+                </div>
+              )}
+              {r.problems && r.problems.length > 0 && (
+                <ul className="problems" data-testid="turn-problems">
+                  {r.problems.map((p, i) => (
+                    <li key={i}>{p}</li>
+                  ))}
+                </ul>
+              )}
+              {!applied && r.proposed > 0 && (
+                <div className="muted small-text">
+                  What it proposed ({r.proposed} step{r.proposed === 1 ? "" : "s"}) was not applied.
+                </div>
+              )}
+              {applied && stepList(row.steps)}
+            </div>
+          );
+        })}
       </div>
+      {state.steps.length > 0 && (
+        <div className="stack-actions">
+          {onRate && (
+            <span className="rate" title="How good is the result? Recorded for learning.">
+              Rate:
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} className="small" onClick={() => onRate(n)} data-testid={`rate-${n}`}>
+                  {n}
+                </button>
+              ))}
+            </span>
+          )}
+          <span className="muted" data-testid="approval-note">
+            Exporting approves the stack as it stands: {state.steps.length} step{state.steps.length === 1 ? "" : "s"}
+            {removed > 0 ? `; ${removed} removed, left out` : ""}.
+          </span>
+        </div>
+      )}
       <form
         className="ask"
         onSubmit={(e) => {

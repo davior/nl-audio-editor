@@ -1,6 +1,8 @@
-// M1 end to end: typed requests in the console, applied at once; changing,
-// removing and restoring them in the stack; export, undo and redo. The model is
-// the stand-in the global setup starts, so no network or key is needed.
+// M1 end to end: typed requests, applied at once and listed with the steps
+// they put on the stack; changing, removing and restoring those in place;
+// export, undo and redo; the list as it was when the project is opened again.
+// The model is the stand-in the global setup starts, so no network or key is
+// needed.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -29,7 +31,7 @@ test("1. “clean this recording up” applies the reference plan at once, and e
   const turn = await say(page, "clean this recording up");
   await expect(turn).toHaveAttribute("data-status", "applied");
   await expect(turn).toHaveAttribute("data-via", "local");
-  expect(await opsOf(turn.getByTestId("applied-step"))).toEqual(fx.cliSteps);
+  expect(await opsOf(turn.getByTestId("stack-step"))).toEqual(fx.cliSteps);
   await expect(page.getByTestId("stack-step")).toHaveCount(4);
   // The same stack as the command line's for the same recording and recipe.
   await expect.poll(async () => (await nlae(page)).project.stackHash).toBe(fx.cliStackHash);
@@ -74,14 +76,16 @@ test("2. “the hum is distracting” goes to the model and is applied; a value 
   await expect(turn).toHaveAttribute("data-status", "applied");
   await expect(turn).toHaveAttribute("data-via", "model");
   await expect(turn.getByTestId("turn-text")).toContainText("50 Hz hum");
-  const step = turn.getByTestId("applied-step");
+  await expect(turn.locator(".you")).toHaveText("the hum is distracting");
+  await expect(turn.locator(".via")).toHaveText("via mock · mock-1");
+  const step = turn.getByTestId("stack-step");
   await expect(step).toHaveAttribute("data-op", "line_reduce");
   await expect(step.getByTestId("measurements")).not.toBeEmpty();
   await expect(page.getByTestId("stack-step")).toHaveCount(1);
-  await expect(page.getByTestId("step-meta")).toContainText("mock-1 (mock) via console — “the hum is distracting”");
 
-  // Change a value from the card: the stack's editor opens on the step.
-  await step.getByTestId("edit-applied").click();
+  // Change a value in place: the editor opens under the step.
+  await step.getByTestId("select-step").click();
+  await expect(step.getByTestId("step-editor")).toBeVisible();
   const editor = page.getByTestId("step-editor");
   await editor.getByTestId("param-max_depth_db").fill("30");
   await editor.getByTestId("apply-edit").click();
@@ -113,8 +117,8 @@ test("3. a removal is logged with its reason; the step keeps its place and can b
   const before = (await nlae(page)).project.stackHash;
   const turn = await say(page, "cut 3,100 to 3,200 Hz by 12 dB");
   await expect(turn).toHaveAttribute("data-via", "local");
-  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "band_cut");
-  await expect(turn.getByTestId("applied-step")).toContainText("3100–3200 Hz");
+  await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "band_cut");
+  await expect(turn.getByTestId("stack-step")).toContainText("3100–3200 Hz");
   await expect(page.getByTestId("stack-step")).toHaveCount(1);
   const after = (await nlae(page)).project.stackHash;
 
@@ -125,7 +129,7 @@ test("3. a removal is logged with its reason; the step keeps its place and can b
   expect(excluded.data.reason).toBe("it takes too much of the voice");
   await expect(page.getByTestId("stack-step")).toHaveCount(0);
   await expect(page.getByTestId("stack-step-removed")).toContainText("it takes too much of the voice");
-  await expect(turn.getByTestId("applied-step")).toContainText("removed");
+  await expect(turn.getByTestId("stack-step-removed")).toContainText("removed");
   await expect.poll(async () => (await nlae(page)).project.stackHash).toBe(before);
 
   // Restored to its place, with the values it had.
@@ -143,7 +147,7 @@ test("4. an area on the spectrogram and “compress the peaks here” give a spe
   const area = (await nlae(page)).view.tfSelection!;
   const turn = await say(page, "compress the peaks here");
   await expect(turn).toHaveAttribute("data-via", "local");
-  const step = turn.getByTestId("applied-step");
+  const step = turn.getByTestId("stack-step");
   await expect(step).toHaveAttribute("data-op", "spectral_compressor");
   await expect(step.getByTestId("measurements")).not.toBeEmpty();
   const [applied] = await logged(page, "step.applied");
@@ -157,8 +161,8 @@ test("5. a model that proposes an impossible value is asked once to correct itse
   await useMockModel(page);
   const turn = await say(page, "make it much louder");
   await expect(turn).toHaveAttribute("data-status", "applied");
-  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "gain");
-  await expect(turn.getByTestId("applied-step")).toContainText("6.0 dB");
+  await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "gain");
+  await expect(turn.getByTestId("stack-step")).toContainText("6.0 dB");
   const [first, second] = await logged(page, "assistant.exchange", 2);
   expect(JSON.stringify(first.data.problems)).toContain("gain_db");
   expect(second.data.corrects).toBe(first.hash);
@@ -214,13 +218,13 @@ test("6. the model is sent the selection, never audio, and the key is never stor
   expect(readFileSync(await download.path()).includes(Buffer.from(KEY))).toBe(false);
 });
 
-test("7. undo takes back the last change, from the stack panel or in words; redo repeats it; a rating is recorded", async ({ page }) => {
+test("7. undo takes back the last change, with the button or in words; redo repeats it; a rating is recorded", async ({ page }) => {
   await start(page);
   await importClip(page);
   const empty = (await nlae(page)).project.stackHash;
   for (const how of ["button", "words"]) {
     const turn = await say(page, "turn it up by 3 dB");
-    await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "gain");
+    await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "gain");
     await expect(page.getByTestId("stack-step")).toHaveCount(1);
     if (how === "button") {
       await page.getByTestId("rate-4").click();
@@ -255,7 +259,7 @@ test("8. an operation the model sees only in the index is described when it asks
   const turn = await say(page, "make it brighter");
   await expect(turn).toHaveAttribute("data-status", "applied");
   await expect(turn).toHaveAttribute("data-via", "model");
-  await expect(turn.getByTestId("applied-step")).toHaveAttribute("data-op", "tilt");
+  await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "tilt");
 
   // Two exchanges: the first offers tilt only in the index; the second describes it and offers it.
   const exchanges = await logged(page, "assistant.exchange", 2);
@@ -280,7 +284,7 @@ test("9. “raise the pitch by 2 semitones” is shifted at once and labelled as
   const turn = await say(page, "raise the pitch by 2 semitones");
   await expect(turn).toHaveAttribute("data-via", "local");
   await expect(turn).toHaveAttribute("data-status", "applied");
-  const step = turn.getByTestId("applied-step");
+  const step = turn.getByTestId("stack-step");
   await expect(step).toHaveAttribute("data-op", "pitch_shift");
   await expect(step).toContainText("+2.00 semitones (×1.1225), formants kept");
   await expect(step.getByTestId("measurements")).not.toBeEmpty();
@@ -292,4 +296,57 @@ test("9. “raise the pitch by 2 semitones” is shifted at once and labelled as
   expect(s.class).toBe("creative");
   expect(s.label).toBe("altered (processed, not factual)");
   expect(s.resolved).toEqual({ semitones: 2, preserve_formants: true, ratio: 1.122462 });
+});
+
+test("10. each request is listed with its steps, in the order made, and comes back as it was when the project is opened again", async ({
+  page,
+}) => {
+  await start(page);
+  await importClip(page);
+  await useMockModel(page);
+  const cut = await say(page, "cut 3,100 to 3,200 Hz by 12 dB");
+  await expect(cut).toHaveAttribute("data-status", "applied");
+  const hum = await say(page, "the hum is distracting");
+  await expect(hum).toHaveAttribute("data-status", "applied");
+  const question = await say(page, "who is speaking loudest?");
+  await expect(question).toHaveAttribute("data-status", "reply");
+  // Listening changes nothing and logs nothing: it is listed while the page is open.
+  const listen = await say(page, "play the residual");
+  await expect(listen).toHaveAttribute("data-status", "done");
+
+  // Each step sits under its request, numbered by its place in the stack; it is removed in place.
+  await expect(cut.getByTestId("stack-step")).toHaveAttribute("value", "1");
+  await expect(hum.getByTestId("stack-step")).toHaveAttribute("value", "2");
+  await hum.getByTestId("remove-step").click();
+  await hum.getByTestId("remove-confirm").click();
+  await expect(hum.getByTestId("stack-step-removed")).toHaveCount(1);
+  await logged(page, "step.excluded");
+
+  // Steps only: what put nothing on the stack is left out.
+  const turns = page.getByTestId("turn");
+  await page.getByTestId("steps-only").check();
+  await expect(turns).toHaveCount(2);
+  await page.getByTestId("steps-only").uncheck();
+  await expect(turns).toHaveCount(4);
+
+  // Opened again, the requests come back from the log as they were; the listening does not.
+  const shown = () =>
+    turns.evaluateAll((els) =>
+      els.map((e) => [e.getAttribute("data-status"), e.getAttribute("data-via"), e.querySelector(".you")?.textContent].join(" ")),
+    );
+  const before = await shown();
+  await page.reload();
+  await page.waitForFunction(() => window.__nlae?.ready === true);
+  await expect(turns).toHaveCount(3);
+  expect(await shown()).toEqual(before.slice(0, 3));
+  await expect(turns.nth(0).getByTestId("stack-step")).toHaveAttribute("data-op", "band_cut");
+  await expect(turns.nth(1).locator(".via")).toHaveText("via mock · mock-1");
+  await expect(turns.nth(1).getByTestId("turn-text")).toContainText("50 Hz hum");
+  await expect(turns.nth(1).getByTestId("stack-step-removed")).toHaveAttribute("data-op", "line_reduce");
+  await expect(turns.nth(2).getByTestId("turn-text")).toContainText("Which part of the recording");
+
+  // Restored from the list as it came back.
+  await turns.nth(1).getByTestId("restore-step").click();
+  await logged(page, "step.restored");
+  await expect(page.getByTestId("stack-step")).toHaveCount(2);
 });

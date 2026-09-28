@@ -367,6 +367,12 @@ impl WasmProject {
         to_js(&self.project.log.events().to_vec())
     }
 
+    /// The requests made of the project, rebuilt from its log, oldest first:
+    /// each with its answer and the steps it put on the stack.
+    pub fn requests(&self) -> Result<JsValue, JsValue> {
+        to_js(&assistant::requests(self.project.log.events()))
+    }
+
     /// Files written since the last call (path → Uint8Array), for persistence.
     /// With `skip_source`, the recording itself is left out (the page stores it
     /// straight from the file it read, without a round trip through here).

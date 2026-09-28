@@ -22,6 +22,7 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **The steps above a removed, restored or edited step keep their recorded values** — chosen by the product owner, 2026-09-26: predictable, and what the user typed stays as typed. A step measured on audio that has since changed (a normalise's gain, a noise profile) is flagged, and *Measure again* is the user's own edit.
 - **Exporting approves the stack as it stands** — chosen by the product owner, 2026-09-26: without a per-step *Accept*, the export is the point where a person signs off the processing; `render.exported` already records the stack hash.
 - **The command line keeps preview → accept** — chosen by the product owner, 2026-09-26: scripted and batch work (M4) benefits from a preview to a file before committing; it also applies at once with `ask --apply`, and gains `remove`, `restore`, `edit`, `remeasure`, `undo` and `redo`.
+- **The console and the stack are one list, rebuilt from the log** — chosen by the product owner, 2026-09-27: they showed the same steps twice with different controls; one list keeps every control on the step, under the words that asked for it, and survives a reload, which the console's turns did not. Requests that put nothing on the stack stay in place, with *Steps only* to hide them; a request with several steps has no controls of its own.
 
 ## Platform and architecture
 
@@ -38,6 +39,7 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Project directory as the working form, `.nlae` ZIP as the portable form** — true append-only logging while working; one file to share.
 - **Own minimal stored-only ZIP writer/reader** — reproducible bundles (sorted entries, fixed timestamps), no compression of evidence audio, few dependencies.
 - **Source stored under its original filename** — the invariant forbids renaming; its hash is recorded alongside.
+- **The requests are projected from the log, not logged again** — a step's event already names its exchange and dictation, and an exchange the one it corrects or follows; the only addition is an exchange's own `dictation` link, so a spoken question answered in words keeps its mark. They ride on every project summary, so the list and the stack always change together.
 - **No `wasm-opt` on the WebAssembly module** — the parity test verifies exactly what the compiler produced; the optimiser rewrites the binary and is not needed at ~2 MB.
 - **React + TypeScript + Vite for the frontend** — widely known, adequate for canvas-heavy views and generated panels.
 - **TypeScript types generated from the Rust types (ts-rs)** — the frontend cannot drift from the record formats; CI fails if they are stale.

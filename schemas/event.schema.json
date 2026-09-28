@@ -100,6 +100,13 @@
       "then": { "properties": { "data": { "required": ["parent_project", "parent_head", "inherited_steps", "source"] } } } },
     { "if": { "properties": { "type": { "const": "project.clone_made" } } },
       "then": { "properties": { "data": { "required": ["child_project", "steps_inherited"] } } } },
+    { "if": { "properties": { "type": { "const": "assistant.exchange" } } },
+      "then": { "properties": { "data": {
+        "properties": {
+          "corrects": { "$ref": "step.schema.json#/$defs/hash" },
+          "describes": { "$ref": "step.schema.json#/$defs/hash" },
+          "dictation": { "$ref": "step.schema.json#/$defs/hash" }
+        } } } } },
     { "if": { "properties": { "type": { "const": "speech.transcribed" } } },
       "then": { "properties": { "data": {
         "required": ["provider", "model", "host", "params", "request_ids", "heard", "segments", "words", "edited", "audio_s", "latency_ms"],

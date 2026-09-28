@@ -1,9 +1,10 @@
+import type { LoggedRequest } from "../../../shared/types/LoggedRequest";
 import type { Manifest } from "../../../shared/types/Manifest";
 import type { OpenReport } from "../../../shared/types/OpenReport";
 import type { StackState } from "../../../shared/types/StackState";
 import type { SpectrogramRequest } from "../../../shared/types/SpectrogramRequest";
 
-export type { Manifest, OpenReport, StackState };
+export type { LoggedRequest, Manifest, OpenReport, StackState };
 export type { Step } from "../../../shared/types/Step";
 export type { Scope } from "../../../shared/types/Scope";
 export type { PreviewRecord } from "../../../shared/types/PreviewRecord";
@@ -39,6 +40,8 @@ export interface ProjectSummary {
   readOnly: string | null;
   /** The source has no analysis of the current version logged yet. */
   needsAnalysis: boolean;
+  /** The requests made of it, rebuilt from the log, oldest first. */
+  requests: LoggedRequest[];
 }
 
 /** One step on its own, over the whole recording. */

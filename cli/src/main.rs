@@ -492,6 +492,7 @@ fn ask(a: &AskArgs) -> Res<()> {
                     problems: next.problems(),
                     corrects: corrects.take(),
                     describes: describes.take(),
+                    dictation: None,
                 };
                 let hash = assistant::record_exchange(&mut p, &mut e, &exchange)
                     .map_err(|e| e.to_string())?;
