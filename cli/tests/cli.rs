@@ -257,14 +257,16 @@ fn ask_in_plain_words_locally_and_through_a_model() {
         exchanges[exchanges.len() - 1],
     );
     assert_eq!(answered["data"]["describes"], asked["hash"]);
-    let offered = |e: &serde_json::Value| {
+    let offers = |e: &serde_json::Value, tool: &str| {
         e["data"]["request"]["tools"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|t| t["function"]["name"] == "tilt")
+            .any(|t| t["function"]["name"] == tool)
     };
-    assert!(!offered(asked) && offered(answered));
+    assert!(!offers(asked, "tilt") && offers(answered, "tilt"));
+    // The one chance to look is spent: the follow-up does not offer it again.
+    assert!(offers(asked, "describe_operations") && !offers(answered, "describe_operations"));
     nlae(&["reject", "case", &preview_id(&out)], &dir);
 
     // Undo in words; and the dataset carries the exchange as it happened.

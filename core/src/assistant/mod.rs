@@ -100,7 +100,9 @@ impl NextRound {
 
 /// The policy for one request, the same in every front end: at most one round
 /// to show the model operations it asked to see, and one to correct an answer
-/// that cannot be used.
+/// that cannot be used. Once its round is spent, `describe_operations` is not
+/// offered again (`build_expansion`), so a second call to it is the model
+/// calling a tool it was not given.
 pub fn next_round(request: &Value, response: &Value, rounds: Rounds) -> Result<NextRound, String> {
     let fix = |problems: Vec<String>| -> Result<NextRound, String> {
         if rounds.corrected {
@@ -115,7 +117,7 @@ pub fn next_round(request: &Value, response: &Value, rounds: Rounds) -> Result<N
     match parse_response(response) {
         Ok(p) if p.describe.is_empty() => Ok(NextRound::Done { proposal: p }),
         Ok(_) if rounds.described => fix(vec![format!(
-            "the operations were already described; call one of them instead of `{DESCRIBE_TOOL}`"
+            "`{DESCRIBE_TOOL}` was already called and cannot be called again; the operations it described are tools now"
         )]),
         Ok(p) => Ok(NextRound::Describe {
             request: build_expansion(request, response, &p.describe)?,
@@ -431,6 +433,137 @@ mod tests {
         let last = p.log.events().last().unwrap().clone();
         assert_eq!(last["data"]["describes"], json!(first));
         assert_eq!(last["data"]["prompt_version"], json!(PROMPT_VERSION));
+    }
+
+    fn offers(request: &Value, name: &str) -> bool {
+        request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["function"]["name"] == name)
+    }
+
+    fn last_message(request: &Value) -> String {
+        request["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// The reported failure: asked to "get rid of the static and bring the voices
+    /// forward", the model looked up some operations, then asked to see another.
+    /// `describe_operations` was still on offer, was refused, was still on offer
+    /// in the correction, was asked for again, and the request failed.
+    #[test]
+    fn a_model_that_asks_to_see_more_is_not_offered_the_tool_it_would_be_refused() {
+        let mut env = FixedEnv::default();
+        let mut p = project(&mut env);
+        let words = "I can hear voices far back under static. Can we get rid of the static and bring the voices forward?";
+        let req = request_for(&mut p, "m-1", &[], words, None).unwrap();
+        assert!(offers(&req, DESCRIBE_TOOL));
+
+        // It asks to see two operations: the follow-up offers them, and no more looking.
+        let ask = call(DESCRIBE_TOOL, json!({ "ids": ["gate", "low_pass"] }));
+        let NextRound::Describe {
+            request: second, ..
+        } = next_round(&req, &ask, Rounds::default()).unwrap()
+        else {
+            panic!("expected a describe round");
+        };
+        assert!(offers(&second, "gate") && offers(&second, "low_pass"));
+        assert!(!offers(&second, DESCRIBE_TOOL));
+        assert!(last_message(&second).starts_with("Described: gate, low_pass."));
+
+        // Asking for another anyway is a problem, corrected once. The correction
+        // does not offer the tool either, and says what happened.
+        let more = call(DESCRIBE_TOOL, json!({ "ids": ["bell"] }));
+        let described = Rounds {
+            described: true,
+            corrected: false,
+        };
+        let NextRound::Correct {
+            request: third,
+            problems,
+        } = next_round(&second, &more, described).unwrap()
+        else {
+            panic!("expected a correction");
+        };
+        assert!(
+            problems[0].contains("cannot be called again"),
+            "{problems:?}"
+        );
+        assert!(!offers(&third, DESCRIBE_TOOL) && offers(&third, "low_pass"));
+        assert!(last_message(&third).contains("the operations it described are tools now"));
+
+        // Then it can use what it was shown.
+        let both = Rounds {
+            described: true,
+            corrected: true,
+        };
+        let use_it = call(
+            "low_pass",
+            json!({ "params": { "cutoff_hz": 6000 }, "scope": { "kind": "clip" } }),
+        );
+        let NextRound::Done { proposal } = next_round(&third, &use_it, both).unwrap() else {
+            panic!("expected a proposal");
+        };
+        assert_eq!(proposal.steps[0].op, "low_pass");
+
+        // Asking yet again ends it: the problem is shown, after three exchanges.
+        let NextRound::Failed { problems } = next_round(&third, &more, both).unwrap() else {
+            panic!("expected the problems to be shown");
+        };
+        assert!(
+            problems[0].contains("cannot be called again"),
+            "{problems:?}"
+        );
+    }
+
+    /// The other order: a correction first, then a describe call. The follow-up is
+    /// built on a request that already carries the correction, and still withdraws
+    /// the tool.
+    #[test]
+    fn a_describe_call_after_a_correction_is_answered_and_not_offered_again() {
+        let mut env = FixedEnv::default();
+        let mut p = project(&mut env);
+        let req = request_for(&mut p, "m-1", &[], "make it brighter", None).unwrap();
+        let bad = call(
+            "gain",
+            json!({ "params": { "gain_db": 90 }, "scope": { "kind": "clip" } }),
+        );
+        let NextRound::Correct { request: fix, .. } =
+            next_round(&req, &bad, Rounds::default()).unwrap()
+        else {
+            panic!("expected a correction");
+        };
+        assert!(
+            offers(&fix, DESCRIBE_TOOL),
+            "not yet used, so still offered"
+        );
+
+        let ask = call(DESCRIBE_TOOL, json!({ "ids": ["tilt"] }));
+        let corrected = Rounds {
+            described: false,
+            corrected: true,
+        };
+        let NextRound::Describe { request: last, .. } = next_round(&fix, &ask, corrected).unwrap()
+        else {
+            panic!("expected a describe round");
+        };
+        assert!(offers(&last, "tilt") && !offers(&last, DESCRIBE_TOOL));
+
+        let both = Rounds {
+            described: true,
+            corrected: true,
+        };
+        let use_it = call(
+            "tilt",
+            json!({ "params": { "db_per_octave": 1.5 }, "scope": { "kind": "clip" } }),
+        );
+        assert!(matches!(
+            next_round(&last, &use_it, both).unwrap(),
+            NextRound::Done { .. }
+        ));
     }
 
     #[test]
