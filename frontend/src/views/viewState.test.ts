@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultView, follow, MIN_SPAN, restoreView, scroll, showRange, zoom } from "./viewState";
+import { defaultView, fMaxOptions, follow, MIN_SPAN, restoreView, reveal, scroll, showRange, zoom } from "./viewState";
 
 const D = 12;
 const SR = 48000;
@@ -57,5 +57,34 @@ describe("view state", () => {
     const w = { ...v, t0: 0, t1: 2 };
     expect(follow(w, 1, D)).toBe(w);
     expect(follow(w, 2.01, D)).toMatchObject({ t0: 2.01 });
+  });
+
+  it("brings a stretch into sight: left alone when it shows, centred when it fits, widened when it does not", () => {
+    const v = { ...defaultView(D, SR), t0: 4, t1: 6 };
+    // All on screen: the very same view.
+    expect(reveal(v, 4.5, 5.5, D)).toBe(v);
+    expect(reveal(v, 4, 6, D)).toBe(v);
+    // Off screen but shorter than the view: same zoom, centred.
+    const c = reveal(v, 9, 10, D);
+    expect([c.t0, c.t1]).toEqual([8.5, 10.5]);
+    // Only partly on screen counts as off screen.
+    const p = reveal(v, 5.5, 6.5, D);
+    expect(p.t1 - p.t0).toBeCloseTo(2);
+    expect((p.t0 + p.t1) / 2).toBeCloseTo(6);
+    // Near the ends the view stays inside the recording.
+    expect(reveal(v, 0, 0.5, D)).toMatchObject({ t0: 0, t1: 2 });
+    expect(reveal(v, 11.5, 12, D)).toMatchObject({ t0: 10, t1: 12 });
+    // Longer than the view: widened to hold it, with a margin.
+    const w = reveal(v, 1, 9, D);
+    expect(w.t0).toBeLessThan(1);
+    expect(w.t1).toBeGreaterThan(9);
+    // Nothing but the time window changes.
+    expect({ ...c, t0: v.t0, t1: v.t1 }).toEqual(v);
+  });
+
+  it("offers the top frequencies up to the Nyquist frequency", () => {
+    expect(fMaxOptions(48000)).toEqual([2000, 4000, 8000, 12000, 24000]);
+    expect(fMaxOptions(16000)).toEqual([2000, 4000, 8000]);
+    expect(fMaxOptions(11025)).toEqual([2000, 4000, 5512.5]);
   });
 });

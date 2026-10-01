@@ -18,7 +18,7 @@ use nlae_core::assistant::{
 use nlae_core::audio::decode;
 use nlae_core::audio::wav::{write_wav_with_cues, WavFormat};
 use nlae_core::project::store::{MemStore, Store, StoreError};
-use nlae_core::project::{bundle, ApplyOptions, CreateOptions, Origin, Project};
+use nlae_core::project::{bundle, ApplyOptions, CreateOptions, NewLabel, Origin, Project};
 use nlae_core::provenance::env::{format_rfc3339_ms, ulid};
 use nlae_core::provenance::Actor;
 use nlae_core::provenance::{AppInfo, Env};
@@ -631,6 +631,53 @@ impl WasmProject {
             note,
         };
         self.project.rate(&mut WebEnv, rating, None).map_err(js_err)
+    }
+
+    /// The labels, rebuilt from the log, oldest first.
+    pub fn labels(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.project.labels())
+    }
+
+    /// Label a stretch of the original (seconds) or, with a band (Hz), an area;
+    /// returns the label. Logged as `label.added`.
+    pub fn add_label(
+        &mut self,
+        t0: f64,
+        t1: f64,
+        f_lo: Option<f64>,
+        f_hi: Option<f64>,
+        text: &str,
+    ) -> Result<JsValue, JsValue> {
+        let new = NewLabel {
+            t0,
+            t1,
+            f_lo,
+            f_hi,
+            text: text.to_string(),
+        };
+        to_js(
+            &self
+                .project
+                .add_label(&mut WebEnv, new, None)
+                .map_err(js_err)?,
+        )
+    }
+
+    /// Change a label's text; returns the label. Logged as `label.edited`.
+    pub fn edit_label(&mut self, id: &str, text: &str) -> Result<JsValue, JsValue> {
+        to_js(
+            &self
+                .project
+                .edit_label(&mut WebEnv, id, text, None)
+                .map_err(js_err)?,
+        )
+    }
+
+    /// Take a label off the list. Logged as `label.removed`; its words stay in the log.
+    pub fn remove_label(&mut self, id: &str) -> Result<(), JsValue> {
+        self.project
+            .remove_label(&mut WebEnv, id, None)
+            .map_err(js_err)
     }
 
     /// How the stack's time edits lay the original out in the output (seconds).

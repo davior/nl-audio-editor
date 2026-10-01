@@ -28,6 +28,7 @@ one project is one stack; different streams of work are clones, not layers.
 - A **time × frequency rectangle** on the spectrogram — the scope for `tf_patch` operations
   such as the spectral compressor.
 - Both are saved in the project's view state.
+- Either can be **labelled** (see *Labels*), and a label selects its place again.
 
 ## Transport
 
@@ -111,6 +112,41 @@ changes are reviewed, pruned and tuned. In the browser:
 - **Undo and redo** in words are handled here.
 - **Preview mode is gone from the browser.** The command line keeps preview and accept.
 
+## Labels
+
+Requested by the product owner, 2026-10-01. A label is a one-line note on a selected stretch of
+the recording, or on a selected time × frequency area, so that a place can be found again. It is
+called a label because *annotation* already names a note on a step of the stack
+(`step.annotated`).
+
+- **Making one.** Select a stretch on the waveform, or an area on the spectrogram, then
+  right-click that lane, or press *＋ Label* beside the selection's readout. A small form opens at
+  the pointer, saying what will be labelled, with a one-line box: Enter adds the label; Escape, or
+  a click elsewhere, closes the form. A right-click with nothing selected says what to select
+  first; it selects nothing and does not move the playhead.
+- **The list.** *Labels* sits to the right of the stack (under it in a narrow window), in time
+  order along the recording (labels at one place in the order they were made), each with its
+  place and its text, scrolling by itself to the label just added.
+- **Nothing is drawn on the lanes.** A label is not shown on the waveform or the spectrogram; the
+  list is where they are.
+- **Clicking a label** selects its place again, exactly: a stretch becomes the time selection and
+  an area the area selection, and the other selection is cleared. The view moves to hold it:
+  unchanged when it is all on screen already, otherwise centred at the same zoom, or widened when
+  the view is too short to hold it. The spectrogram's top frequency rises when an area reaches
+  above it. The label whose place is selected now is outlined.
+- **Changing and removing.** ✎ changes the text in place (Enter, or leaving the box, keeps the
+  change; Escape drops it); × at the end of the row removes the label. A label's place cannot be
+  changed: remove it and make another.
+- **Limits.** The text is one line of 1–200 characters, without spaces at either end; the place
+  lies inside the recording. A project that did not verify takes no labels, and the form says so.
+- **In the log.** `label.added`, `label.edited` and `label.removed`, as the user's actions
+  (`03-projects-clones-provenance.md`). The list is rebuilt from the log by the core, so it is the
+  same when the project is opened again and travels in a bundle. Removing a label keeps its words
+  in the log.
+
+`OPEN:` Should a clone inherit its parent's labels? Today it starts without them.
+`OPEN:` Labels are not yet in the command line (`nlae label …`) or the dataset export.
+
 ## Recording
 
 `getUserMedia` with echo cancellation, noise suppression and automatic gain control **off**;
@@ -130,7 +166,8 @@ lineage, integrity badge, *Save bundle*, *Close*), two tool rows, the lanes, the
 readouts, then three panels — stack, record (hashes, capture settings), event log.
 
 **Mouse and keys.** Click a lane to seek; drag on the waveform for a time range, on the
-spectrogram for a time × frequency area; wheel zooms around the pointer, shift+wheel scrolls.
+spectrogram for a time × frequency area; right-click a lane to label its selection; wheel zooms
+around the pointer, shift+wheel scrolls.
 Space plays and pauses, Home returns to the start. *Stop* returns to where playback started;
 *Loop* with a selection loops the selection.
 
