@@ -23,6 +23,9 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **Exporting approves the stack as it stands** — chosen by the product owner, 2026-09-26: without a per-step *Accept*, the export is the point where a person signs off the processing; `render.exported` already records the stack hash.
 - **The command line keeps preview → accept** — chosen by the product owner, 2026-09-26: scripted and batch work (M4) benefits from a preview to a file before committing; it also applies at once with `ask --apply`, and gains `remove`, `restore`, `edit`, `remeasure`, `undo` and `redo`.
 - **The console and the stack are one list, rebuilt from the log** — chosen by the product owner, 2026-09-27: they showed the same steps twice with different controls; one list keeps every control on the step, under the words that asked for it, and survives a reload, which the console's turns did not. Requests that put nothing on the stack stay in place, with *Steps only* to hide them; a request with several steps has no controls of its own.
+- **Labels are one-line notes on a selected stretch or area, added with a right-click, listed beside the stack and never drawn on the lanes; clicking one selects its place again** — chosen by the product owner, 2026-10-01: the recording stays unmarked, the list is the index, and the click is the way back to the place. A label's place cannot be changed (remove it and make another), so there is no resizing to build.
+- **They are called labels, not annotations** — chosen by the product owner, 2026-10-01: `step.annotated` already names a note on a step.
+- **The list is in time order, and *＋ Label* beside each selection does what the right-click does** — built so while making labels, not yet reviewed with the product owner: a list read along the recording is the more useful index, and a button is the way for anyone without a right-click.
 
 ## Platform and architecture
 
@@ -79,6 +82,10 @@ brackets refer to the open questions in section 11 of `docs/build-brief.md`.
 - **A step's own monitors (before it, after it, what it removed) cover the whole recording, and are never saved as the view** — they replace the preview's window A/B for any step, not only the newest; a saved one could name a step that is no longer on the stack.
 - **"redo" is routed only as "redo" or "redo …"** — "put that back" means undo after a removal and redo after an undo, so it is left to the model.
 - **Drift is recorded as `resolved_on`, only when it differs from the step's input** — steps that never drifted are unchanged in the log, and a step that is measured again, or whose input comes back, loses it.
+- **Labels are events (`label.added`, `label.edited`, `label.removed`), and the list is projected from the log, apart from the stack** — invariant 11 makes every annotation an event, and a label is something the user wrote about evidential material, so it belongs in the chained log rather than in the manifest's interface state. Kept out of `StackState`, so no stack hash, undo list or cached projection changes.
+- **A removed label's words stay in the log, and an edit records the words it replaced** — nothing is deleted from the log.
+- **A label's text is one line of 1–200 characters, trimmed; its place must lie inside the recording, and one outside is refused, not clamped** — the rule for every value. The browser keeps a drag inside the lane, so a refusal would mean a bug, not a gesture.
+- **A clone starts without its parent's labels** — built so while making labels, not yet reviewed with the product owner (`OPEN:` in `07-interface.md`): a clone follows another stream of editing and inherits steps only.
 - **Working name `nlae`** [19] — from the repository name, until a product name is chosen and cleared.
 
 ## Operations

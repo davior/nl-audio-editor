@@ -8,12 +8,14 @@ import type { EditMap, ProjectSummary, ViewState, Which } from "../core/types";
 import { debug } from "../debug";
 import { sync } from "../storage/sync";
 import { IntegrityBadge } from "./IntegrityBadge";
+import { AddLabel, LabelsPanel } from "./LabelsPanel";
+import { brief, placeOf, showLabel, type Kind, type Place } from "./labels";
 import { Spectrogram, TimeAxis, Waveform } from "./Lanes";
 import { LogViewer, type LogFailure } from "./LogViewer";
 import { Console } from "./Console";
 import { useDescriptors } from "./StepEditor";
 import type { StackActions } from "./StepRow";
-import { DB_RANGES, fit, follow, restoreView, scroll, showRange, zoom } from "./viewState";
+import { DB_RANGES, fit, fMaxOptions, follow, restoreView, scroll, showRange, zoom } from "./viewState";
 
 export interface EditorProps {
   summary: ProjectSummary;
@@ -111,6 +113,11 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
   // Requests made with buttons go through the console, as if typed.
   const [consoleRequest, setConsoleRequest] = useState<{ words: string; n: number } | null>(null);
   const [insertLength, setInsertLength] = useState(1);
+  // The form that adds a label to a selection, where it was asked for; null when closed.
+  const [adding, setAdding] = useState<{ kind: Kind; place: Place | null; at: { x: number; y: number } } | null>(null);
+  // The label just added, to bring into sight in the list; and a line that says so.
+  const [labelScroll, setLabelScroll] = useState<{ id: string; n: number } | null>(null);
+  const [labelNote, setLabelNote] = useState<string | null>(null);
   // Analysis runs after the lanes appear, in a worker of its own.
   const [analysis, setAnalysis] = useState<"running" | "done" | "failed" | "not needed">(
     summary.needsAnalysis && !readOnly ? "running" : "not needed",
@@ -457,6 +464,37 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
       debug("rated", overall);
     });
 
+  // Labels are notes on the recording, logged like any other action; they change nothing else.
+  const labelChange = async (f: () => Promise<ProjectSummary>) => {
+    try {
+      const s = await f();
+      await save();
+      onChanged(s);
+    } catch (e) {
+      onError(e);
+    }
+  };
+  const openAdd = (kind: Kind, x: number, y: number) => setAdding({ kind, place: placeOf(kind, view, duration, sampleRate), at: { x, y } });
+  const closeAdd = useCallback(() => setAdding(null), []);
+  const addLabel = async (place: Place, text: string) => {
+    setAdding(null); // closed at once, so a second Enter cannot add it twice
+    try {
+      const r = await core.addLabel(id, place, text);
+      await save();
+      onChanged(r.summary);
+      setLabelScroll((n) => ({ id: r.label.id, n: (n?.n ?? 0) + 1 }));
+      setLabelNote(`Added the label “${brief(r.label.text)}”`);
+    } catch (e) {
+      onError(e);
+    }
+  };
+  useEffect(() => {
+    if (!labelNote) return;
+    const h = setTimeout(() => setLabelNote(null), 4000);
+    return () => clearTimeout(h);
+  }, [labelNote]);
+  const labelWhy = readOnly ? "This project did not verify, so it cannot be changed." : null;
+
   const exportWav = () =>
     act("Rendering…", async () => {
       const bytes = await core.exportWav(id, exportFormat);
@@ -519,6 +557,7 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
     onSelectTf: (tfSelection: ViewState["tfSelection"]) => update({ tfSelection }),
     onZoom: (factor: number, around: number) => setView((v) => zoom(v, factor, around, duration)),
     onScroll: (dt: number) => setView((v) => scroll(v, dt, duration)),
+    onLabelMenu: openAdd,
     renderKey: summary.state.stack_hash,
     onComplete: () => setLanesReady(true),
   };
@@ -675,13 +714,11 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
           <label>
             up to{" "}
             <select value={view.fMax} onChange={(e) => update({ fMax: Number(e.target.value) })} data-testid="fmax">
-              {[2000, 4000, 8000, 12000, sampleRate / 2]
-                .filter((f, i, a) => f <= sampleRate / 2 && a.indexOf(f) === i)
-                .map((f) => (
-                  <option key={f} value={f}>
-                    {f >= 1000 ? `${f / 1000} kHz` : `${f} Hz`}
-                  </option>
-                ))}
+              {fMaxOptions(sampleRate).map((f) => (
+                <option key={f} value={f}>
+                  {f >= 1000 ? `${f / 1000} kHz` : `${f} Hz`}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -764,6 +801,17 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             >
               Remove this stretch
             </button>
+            <button
+              className="small"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                openAdd("range", r.left, r.bottom + 4);
+              }}
+              data-testid="label-range"
+              title="Add a label to this stretch (or right-click the waveform)"
+            >
+              ＋ Label
+            </button>
           </>
         )}
         <span data-testid="tf-selection">
@@ -772,9 +820,22 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             : "Drag on the spectrogram to select a time × frequency area."}
         </span>
         {view.tfSelection && (
-          <button className="small" onClick={() => update({ tfSelection: null })}>
-            clear
-          </button>
+          <>
+            <button className="small" onClick={() => update({ tfSelection: null })}>
+              clear
+            </button>
+            <button
+              className="small"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                openAdd("area", r.left, r.bottom + 4);
+              }}
+              data-testid="label-area"
+              title="Add a label to this area (or right-click the spectrogram)"
+            >
+              ＋ Label
+            </button>
+          </>
         )}
         <span className="insert-silence">
           Insert{" "}
@@ -798,31 +859,58 @@ export function Editor({ summary, detached, notice, onChanged, onOpenClone, onCl
             at the playhead ({fmtTime(playhead)})
           </button>
         </span>
+        <span className="muted" role="status" data-testid="label-note">
+          {labelNote}
+        </span>
       </div>
 
-      <Console
-        summary={summary}
-        selection={selection}
-        unavailable={consoleUnavailable}
-        onSummary={onChanged}
-        onListen={listen}
-        save={save}
-        request={consoleRequest}
-        onDictating={onDictating}
-        stack={{
-          actions,
-          busy: !!busy,
-          selected,
-          onSelect: setSelected,
-          descriptors,
-          onClone: clone,
-          canClone: !readOnly && !busy,
-          onRate: readOnly || busy ? undefined : rate,
-          output: editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null,
-          brokenAtLine: failure ? Number(failure.line) : null,
-          inheritedFrom: lineage?.parent_name,
-        }}
-      />
+      <div className="stack-row">
+        <Console
+          summary={summary}
+          selection={selection}
+          unavailable={consoleUnavailable}
+          onSummary={onChanged}
+          onListen={listen}
+          save={save}
+          request={consoleRequest}
+          onDictating={onDictating}
+          stack={{
+            actions,
+            busy: !!busy,
+            selected,
+            onSelect: setSelected,
+            descriptors,
+            onClone: clone,
+            canClone: !readOnly && !busy,
+            onRate: readOnly || busy ? undefined : rate,
+            output: editMap?.edited ? { duration: editMap.duration_s, original: editMap.original_duration_s } : null,
+            brokenAtLine: failure ? Number(failure.line) : null,
+            inheritedFrom: lineage?.parent_name,
+          }}
+        />
+        <LabelsPanel
+          labels={summary.labels}
+          view={view}
+          editable={!readOnly}
+          why={labelWhy}
+          scrollTo={labelScroll}
+          onSelect={(l) => setView((v) => showLabel(v, l, duration, sampleRate))}
+          onEdit={(lid, text) => void labelChange(() => core.editLabel(id, lid, text))}
+          onRemove={(lid) => void labelChange(() => core.removeLabel(id, lid))}
+        />
+      </div>
+
+      {adding && (
+        <AddLabel
+          kind={adding.kind}
+          place={adding.place}
+          at={adding.at}
+          editable={!readOnly}
+          why={labelWhy}
+          onAdd={(text) => adding.place && void addLabel(adding.place, text)}
+          onClose={closeAdd}
+        />
+      )}
 
       <div className="panels">
         <div className="panel">

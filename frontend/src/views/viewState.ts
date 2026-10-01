@@ -8,6 +8,11 @@ export const MIN_SPAN = 0.02;
 
 export const DB_RANGES = [30, 45, 60, 75, 90, 120, 150];
 
+/** The top frequencies the spectrogram offers (Hz), lowest first, up to the Nyquist frequency. */
+export function fMaxOptions(sampleRate: number): number[] {
+  return [2000, 4000, 8000, 12000, sampleRate / 2].filter((f, i, a) => f <= sampleRate / 2 && a.indexOf(f) === i);
+}
+
 export function defaultView(duration: number, sampleRate: number): ViewState {
   return {
     t0: 0,
@@ -72,6 +77,17 @@ export function fit(v: ViewState, duration: number): ViewState {
 export function showRange(v: ViewState, t0: number, t1: number, duration: number): ViewState {
   const pad = (t1 - t0) * 0.05;
   return place(v, t0 - pad, t1 - t0 + 2 * pad, duration);
+}
+
+/**
+ * Bring a stretch into sight: nothing changes when it is all on screen already; otherwise it is
+ * centred at the same zoom, or, when the view is too short to hold it, the view widens to fit it.
+ */
+export function reveal(v: ViewState, t0: number, t1: number, duration: number): ViewState {
+  if (t0 >= v.t0 && t1 <= v.t1) return v;
+  const span = v.t1 - v.t0;
+  if (t1 - t0 <= span) return place(v, (t0 + t1) / 2 - span / 2, span, duration);
+  return showRange(v, t0, t1, duration);
 }
 
 /** Page the view forward when the playhead runs off the right edge. */

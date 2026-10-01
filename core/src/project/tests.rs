@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use super::labels::MAX_TEXT_CHARS;
 use super::store::MemStore;
 use super::*;
 use crate::audio::wav::{write_wav, WavFormat};
@@ -502,6 +503,188 @@ fn ratings_and_annotations_are_logged() {
         .is_err());
     assert_eq!(p.state().ratings.len(), 1);
     assert_eq!(p.state().annotations.len(), 1);
+}
+
+fn label_at(t0: f64, t1: f64, text: &str) -> NewLabel {
+    NewLabel {
+        t0,
+        t1,
+        f_lo: None,
+        f_hi: None,
+        text: text.into(),
+    }
+}
+
+#[test]
+fn labels_are_logged_listed_and_kept_when_the_project_is_reopened() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let stack = p.state().clone();
+    let before = p.log.len();
+
+    let cough = p
+        .add_label(&mut env, label_at(1.25, 1.75, "  cough  "), None)
+        .unwrap();
+    assert_eq!(cough.text, "cough", "surrounding spaces are not kept");
+    assert_eq!((cough.f_lo, cough.f_hi), (None, None));
+    let whine = p
+        .add_label(
+            &mut env,
+            NewLabel {
+                f_lo: Some(300.0),
+                f_hi: Some(900.0),
+                ..label_at(1.0, 2.0, "whine")
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!((whine.f_lo, whine.f_hi), (Some(300.0), Some(900.0)));
+    assert_ne!(cough.id, whine.id);
+
+    let edited = p
+        .edit_label(&mut env, &cough.id, "cough, then a door", None)
+        .unwrap();
+    assert_eq!(edited.text, "cough, then a door");
+    assert_eq!((edited.t0, edited.t1), (1.25, 1.75), "its place is kept");
+    p.remove_label(&mut env, &whine.id, None).unwrap();
+    assert_eq!(p.labels(), vec![edited.clone()]);
+
+    // Each is an event of the user's, and an edit keeps the words it replaced.
+    let events = &p.log.events()[before..];
+    let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "label.added",
+            "label.added",
+            "label.edited",
+            "label.removed"
+        ]
+    );
+    assert!(events.iter().all(|e| e["actor"]["kind"] == "user"));
+    assert_eq!(events[2]["data"]["before"], "cough");
+    assert_eq!(events[0]["data"]["t0"], 1.25, "the place is kept exactly");
+
+    // A label changes nothing about the stack, and Undo has nothing of it to take back.
+    assert_eq!(p.state(), &stack);
+
+    // The list is rebuilt from the log.
+    let (q, report) = reopen(&p);
+    assert!(report.ok(), "{:?}", report.problems);
+    assert_eq!(q.labels(), vec![edited]);
+}
+
+#[test]
+fn labels_that_make_no_sense_are_refused_and_nothing_is_logged() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let nyquist = f64::from(p.source.sample_rate) / 2.0;
+    let duration = p.source.duration_s();
+    let n = p.log.len();
+    let band = |lo: Option<f64>, hi: Option<f64>| NewLabel {
+        f_lo: lo,
+        f_hi: hi,
+        ..label_at(1.0, 2.0, "band")
+    };
+
+    let long = "x".repeat(MAX_TEXT_CHARS + 1);
+    for bad in [
+        label_at(1.0, 2.0, ""),
+        label_at(1.0, 2.0, "   "),
+        label_at(1.0, 2.0, "two\nlines"),
+        label_at(1.0, 2.0, "tab\there"),
+        label_at(1.0, 2.0, &long),
+        label_at(2.0, 1.0, "backwards"),
+        label_at(1.0, 1.0, "no length"),
+        label_at(-0.5, 1.0, "before the start"),
+        label_at(duration - 1.0, duration + 0.5, "past the end"),
+        label_at(f64::NAN, 1.0, "not a number"),
+        label_at(0.0, f64::INFINITY, "unbounded"),
+        band(Some(100.0), None),
+        band(None, Some(100.0)),
+        band(Some(900.0), Some(300.0)),
+        band(Some(-1.0), Some(300.0)),
+        band(Some(0.0), Some(nyquist + 1.0)),
+    ] {
+        assert!(
+            matches!(
+                p.add_label(&mut env, bad.clone(), None),
+                Err(ProjectError::Invalid(_))
+            ),
+            "{bad:?} should be refused"
+        );
+    }
+    assert_eq!(p.log.len(), n, "nothing refused is logged");
+
+    // The limits themselves are allowed; the length counts characters, not bytes.
+    let whole = p
+        .add_label(
+            &mut env,
+            NewLabel {
+                f_lo: Some(0.0),
+                f_hi: Some(nyquist),
+                ..label_at(0.0, duration, &"é".repeat(MAX_TEXT_CHARS))
+            },
+            None,
+        )
+        .unwrap();
+
+    // Only a label that is there can be changed or removed, and only to words.
+    assert!(p.edit_label(&mut env, "lb_none", "x", None).is_err());
+    assert!(p.remove_label(&mut env, "lb_none", None).is_err());
+    assert!(p.edit_label(&mut env, &whole.id, " ", None).is_err());
+    assert!(p.edit_label(&mut env, &whole.id, "a\nb", None).is_err());
+    assert_eq!(p.log.len(), n + 1);
+    p.remove_label(&mut env, &whole.id, None).unwrap();
+    assert!(p.edit_label(&mut env, &whole.id, "again", None).is_err());
+    assert!(p.remove_label(&mut env, &whole.id, None).is_err());
+    assert_eq!(p.log.len(), n + 2);
+    assert!(p.labels().is_empty());
+}
+
+#[test]
+fn a_project_that_did_not_verify_takes_no_labels() {
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    let l = p
+        .add_label(&mut env, label_at(1.0, 2.0, "kept"), None)
+        .unwrap();
+    let mut store = p.store.clone();
+    let text = String::from_utf8(store.files["events.jsonl"].clone()).unwrap();
+    let altered = text.replacen("\"field recording\"", "\"field recordin9\"", 1);
+    assert_ne!(altered, text);
+    store
+        .files
+        .insert("events.jsonl".into(), altered.into_bytes());
+    let (mut q, report) = Project::open(store, app()).unwrap();
+    assert!(!report.ok());
+    assert!(matches!(
+        q.add_label(&mut env, label_at(3.0, 4.0, "new"), None),
+        Err(ProjectError::ReadOnly(_))
+    ));
+    assert!(matches!(
+        q.edit_label(&mut env, &l.id, "changed", None),
+        Err(ProjectError::ReadOnly(_))
+    ));
+    assert!(matches!(
+        q.remove_label(&mut env, &l.id, None),
+        Err(ProjectError::ReadOnly(_))
+    ));
+}
+
+#[test]
+fn a_clone_starts_without_the_labels_of_its_parent() {
+    // Labels are the user's notes on one project's recording; a clone follows another
+    // stream of editing and inherits steps only.
+    let mut env = FixedEnv::default();
+    let mut p = new_project(&mut env);
+    p.add_label(&mut env, label_at(1.0, 2.0, "parent's"), None)
+        .unwrap();
+    let c = p
+        .clone_into(&mut env, MemStore::new(), None, None, None)
+        .unwrap();
+    assert!(c.labels().is_empty());
+    assert_eq!(p.labels().len(), 1);
 }
 
 #[test]

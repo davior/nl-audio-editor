@@ -141,6 +141,14 @@ stretch*; to add a pause, click where it should go and use *Insert … s of sile
 edits apply to the output, the lanes keep the original's timeline with removed stretches
 hatched, *Processed* plays the result, and the exported WAV has a cue marker at each edit.
 
+**Labels.** To note what is at a place, select a stretch on the waveform (or an area on the
+spectrogram) and right-click it, or press *＋ Label* beside the selection; type one line and press
+Enter. Labels are listed to the right of the stack, in time order, and are not drawn on the
+recording: click one to select its place again, ✎ to change its text, × to remove it. A label's
+place cannot be changed (remove it and make another). Labels are logged like every other action, so
+they are kept with the project and travel in bundles; they are not part of the stack, so Undo and
+Redo leave them alone, and a clone starts without its parent's.
+
 **The model.** Routine requests like those are handled without a model and need no setup.
 Anything else goes to the provider chosen in the settings (the button with the model's name, at
 the top of the stack), with your words and analysis numbers only, never audio. The model always has the core operations; the others

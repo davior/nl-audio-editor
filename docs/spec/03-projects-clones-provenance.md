@@ -63,6 +63,9 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `step.edited` | step id, parameters before and after, `remeasured` (measured again on the current input, the parameters unchanged), `chain`, `undoes` / `redoes` |
 | `step.removed` | step id. Written before 2026-09-26 for undoing the top step; read as `step.excluded` of that step |
 | `step.annotated` | step id, note, labels |
+| `label.added` | label id, `t0` and `t1` (seconds of the original), `f_lo` and `f_hi` (Hz, for an area: both or neither), text (one line, at most 200 characters) |
+| `label.edited` | label id, the new text, the text it replaced |
+| `label.removed` | label id |
 | `stack.rated` | target (step, plan or stack), overall 1–5, optional dimensions, note |
 | `recipe.saved` / `recipe.replayed` | recipe hash, range, mode, dry-run diff |
 | `render.exported` | file name, format, stack hash (with the final limiter), output hash, limiter measurements, the file's SHA-256, the output's length, and where time was removed or silence inserted (in the original's and the output's time) |
@@ -70,6 +73,15 @@ JSON Lines. Each line is one event in RFC 8785 canonical JSON:
 | `project.clone_made` | child project id, fork step (in the parent's log) |
 | `project.cloned_from` | parent id, parent head, fork step and its event hash, inherited steps (first event of the clone) |
 | `bundle.exported` | bundle manifest hash |
+
+**Labels** (`label.added`, `label.edited`, `label.removed`) are notes on a place in the recording,
+as the user writes them (`07-interface.md`, *Labels*). They are not changes to the stack: no stack
+hash covers them, and Undo and Redo leave them alone. The list is projected from the log
+(`project::labels`), apart from the stack, so it is the same when the project is opened again and
+travels in a bundle. Nothing is deleted: a removed label's words stay in the log, and an edit
+records the words it replaced. (`step.annotated` is another thing: a note on a step.) A clone
+starts without its parent's labels, as it inherits steps only. `OPEN:` should a clone inherit the
+labels of the recording it shares?
 
 ## The step object
 

@@ -14,6 +14,7 @@
 pub mod bindings;
 pub mod bundle;
 mod cache;
+pub mod labels;
 pub mod stack;
 pub mod step;
 pub mod store;
@@ -34,6 +35,7 @@ use crate::scope::Scope;
 use crate::timeline;
 pub use bindings::DiffEntry;
 pub use cache::DEFAULT_LIMIT as RENDER_CACHE_LIMIT;
+pub use labels::{Label, NewLabel};
 pub use stack::{PreviewRecord, StackChange, StackEntry, StackState};
 pub use step::{Binding, BindingSource, Origin, StateSnapshot, Step, StepDraft};
 use store::{MemStore, Store, StoreError};

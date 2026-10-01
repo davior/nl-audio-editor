@@ -19,6 +19,8 @@ interface LaneProps {
   onSelectTf: (sel: ViewState["tfSelection"]) => void;
   onZoom: (factor: number, around: number) => void;
   onScroll: (dt: number) => void;
+  /** A right-click on a lane: the form that adds a label to that lane's selection, at the pointer. */
+  onLabelMenu: (kind: "range" | "area", clientX: number, clientY: number) => void;
   /** Changes whenever what the lanes draw changes (the stack hash). */
   renderKey: string;
   /** Called when a spectrogram view has fully arrived. */
@@ -77,6 +79,8 @@ function useDrag(onClick: (x: number, y: number) => void, onDrag: (x0: number, y
   const start = useRef<{ x: number; y: number } | null>(null);
   return {
     onMouseDown: (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // Only the primary button seeks or selects; a right-click (or ctrl-click) opens the label form.
+      if (e.button !== 0 || e.ctrlKey) return;
       const r = e.currentTarget.getBoundingClientRect();
       start.current = { x: e.clientX - r.left, y: e.clientY - r.top };
     },
@@ -217,7 +221,18 @@ export function Waveform(p: LaneProps) {
 
   return (
     <div className="lane-wrap">
-      <canvas ref={ref} width={p.width} height={height} className="lane" data-testid="waveform" {...handlers} />
+      <canvas
+        ref={ref}
+        width={p.width}
+        height={height}
+        className="lane"
+        data-testid="waveform"
+        {...handlers}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          p.onLabelMenu("range", e.clientX, e.clientY);
+        }}
+      />
       <Busy on={pending} id="waveform-busy" />
     </div>
   );
@@ -417,6 +432,10 @@ export function Spectrogram(p: LaneProps) {
         className="lane"
         data-testid="spectrogram"
         {...handlers}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          p.onLabelMenu("area", e.clientX, e.clientY);
+        }}
         onMouseLeave={() => {
           handlers.onMouseLeave();
           setHover("");

@@ -10,6 +10,7 @@ import type {
   Dictation,
   EditMap,
   Exchange,
+  Label,
   NextRound,
   Pcm,
   ProjectSummary,
@@ -49,6 +50,7 @@ function summary(p: WasmProject): ProjectSummary {
     readOnly: p.read_only() ?? null,
     needsAnalysis: p.needs_analysis(),
     requests: p.requests(),
+    labels: p.labels(),
   };
 }
 
@@ -225,6 +227,26 @@ const api = {
   async rateStack(id: string, overall: number, note?: string): Promise<ProjectSummary> {
     const p = get(id);
     p.rate_stack(overall, note || undefined);
+    return summary(p);
+  },
+  /** Label a stretch (seconds of the original) or, with a band (Hz), an area; returns the label and the project. */
+  async addLabel(
+    id: string,
+    place: { t0: number; t1: number; f_lo?: number; f_hi?: number },
+    text: string,
+  ): Promise<{ label: Label; summary: ProjectSummary }> {
+    const p = get(id);
+    const label = p.add_label(place.t0, place.t1, place.f_lo, place.f_hi, text) as Label;
+    return { label, summary: summary(p) };
+  },
+  async editLabel(id: string, labelId: string, text: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.edit_label(labelId, text);
+    return summary(p);
+  },
+  async removeLabel(id: string, labelId: string): Promise<ProjectSummary> {
+    const p = get(id);
+    p.remove_label(labelId);
     return summary(p);
   },
   async exportWav(id: string, format: "f32" | "pcm24" | "pcm16"): Promise<Uint8Array> {

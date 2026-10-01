@@ -16,6 +16,7 @@
         "step.previewed", "step.modified", "step.accepted", "plan.accepted", "step.rejected",
         "step.applied", "step.excluded", "step.restored", "step.edited",
         "step.removed", "step.annotated", "stack.rated",
+        "label.added", "label.edited", "label.removed",
         "recipe.saved", "recipe.replayed", "render.exported", "dataset.exported",
         "project.clone_made", "project.cloned_from", "bundle.exported",
         "assistant.exchange", "speech.transcribed"
@@ -96,6 +97,33 @@
     { "if": { "properties": { "type": { "const": "stack.rated" } } },
       "then": { "properties": { "data": { "required": ["target_kind", "target", "overall"],
         "properties": { "overall": { "type": "integer", "minimum": 1, "maximum": 5 } } } } } },
+    { "if": { "properties": { "type": { "const": "label.added" } } },
+      "then": { "properties": { "data": {
+        "required": ["label_id", "t0", "t1", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "label_id": { "type": "string", "minLength": 1 },
+          "t0": { "type": "number", "minimum": 0 },
+          "t1": { "type": "number", "exclusiveMinimum": 0 },
+          "f_lo": { "type": "number", "minimum": 0 },
+          "f_hi": { "type": "number", "exclusiveMinimum": 0 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" }
+        },
+        "dependentRequired": { "f_lo": ["f_hi"], "f_hi": ["f_lo"] } } } } },
+    { "if": { "properties": { "type": { "const": "label.edited" } } },
+      "then": { "properties": { "data": {
+        "required": ["label_id", "text", "before"],
+        "additionalProperties": false,
+        "properties": {
+          "label_id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" },
+          "before": { "type": "string" }
+        } } } } },
+    { "if": { "properties": { "type": { "const": "label.removed" } } },
+      "then": { "properties": { "data": {
+        "required": ["label_id"],
+        "additionalProperties": false,
+        "properties": { "label_id": { "type": "string", "minLength": 1 } } } } } },
     { "if": { "properties": { "type": { "const": "project.cloned_from" } } },
       "then": { "properties": { "data": { "required": ["parent_project", "parent_head", "inherited_steps", "source"] } } } },
     { "if": { "properties": { "type": { "const": "project.clone_made" } } },
