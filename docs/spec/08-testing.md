@@ -259,12 +259,19 @@ it; after a noise reduction there is more room between the two.
 
 **The model's tools:**
 - The request carries the core tools, `plan` and `describe_operations`, the index in the
-  instructions, and prompt version 2. No on-demand operation is a tool until it is described.
+  instructions, and prompt version 3. No on-demand operation is a tool until it is described.
+  The instructions and the tool's description say it can be asked once.
 - A describe call parses to the ids asked for; an unknown or system id is a problem.
-- An expansion answers the describe call with the schemas and adds the tools. Any other call
-  in the same answer is answered as not run. Sample data is still refused.
+- An expansion answers the describe call with the schemas and adds the tools, says what was
+  described and that the call cannot be repeated, and withdraws `describe_operations`. Any other
+  call in the same answer is answered as not run. Sample data is still refused.
 - The round policy: one describe round, one correction round, then the problems are shown. A
   second describe call counts as an unusable answer.
+- The reported failure, as a test: a model that looks up two operations and then asks to see
+  another is not offered the tool in the follow-up or in the correction after it, is told why,
+  and can still use what it was shown. Asking again ends the request after three exchanges, with
+  the problem shown. The same holds when the describe call comes after a correction. Without
+  the withdrawal, these tests fail.
 - A logged exchange keeps its `describes` link, and the chain verifies.
 - **Router:** a table of the catalogue phrases ("low cut", "high cut at 10 kHz", "remove the
   mains hum", "normalise to −16 LUFS"…). What was understood before stays as it was: "normalise
@@ -282,7 +289,7 @@ above, 24 tests in about 85 s):
 
 | # | Scenario | Checks |
 |---|---|---|
-| 8 | "make it brighter" | The stand-in model first asks to see `tilt`, then proposes a tilt. Two exchanges are logged at prompt version 2: the first request offers `describe_operations` and not `tilt`; the second offers `tilt` and `describes` the first. The preview refers to the second. Once accepted, the step's actor is the model |
+| 8 | "make it brighter" | The stand-in model first asks to see `tilt`, then proposes a tilt. Two exchanges are logged at prompt version 3: the first request offers `describe_operations` and not `tilt`; the second offers `tilt` and not `describe_operations`, and `describes` the first. The preview refers to the second. Once accepted, the step's actor is the model |
 
 ### Pitch shift (brought forward from M3)
 

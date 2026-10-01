@@ -97,7 +97,7 @@ test("2. “the hum is distracting” goes to the model and is applied; a value 
   // The exchange holds exactly what the provider was sent, and the applied step points to it.
   const [ex] = await logged(page, "assistant.exchange");
   expect(ex.actor).toMatchObject({ kind: "assistant", model: "mock-1", provider: "mock" });
-  expect(ex.data).toMatchObject({ provider: "mock", model: "mock-1", host: "127.0.0.1:4180", prompt_version: 2 });
+  expect(ex.data).toMatchObject({ provider: "mock", model: "mock-1", host: "127.0.0.1:4180", prompt_version: 3 });
   const sent = (await seenByMock()).filter((s) => s.words === "the hum is distracting");
   expect(sent.length).toBeGreaterThan(0);
   expect(sent.map((s) => JSON.parse(s.body))).toContainEqual(ex.data.request);
@@ -261,14 +261,16 @@ test("8. an operation the model sees only in the index is described when it asks
   await expect(turn).toHaveAttribute("data-via", "model");
   await expect(turn.getByTestId("stack-step")).toHaveAttribute("data-op", "tilt");
 
-  // Two exchanges: the first offers tilt only in the index; the second describes it and offers it.
+  // Two exchanges: the first offers tilt only in the index; the second describes it and offers it,
+  // and does not offer another look (the model has one chance to ask).
   const exchanges = await logged(page, "assistant.exchange", 2);
   const tools = (e: Event) => (e.data.request as { tools: { function: { name: string } }[] }).tools.map((t) => t.function.name);
   expect(tools(exchanges[0])).toContain("describe_operations");
   expect(tools(exchanges[0])).not.toContain("tilt");
   expect(tools(exchanges[1])).toContain("tilt");
+  expect(tools(exchanges[1])).not.toContain("describe_operations");
   expect(exchanges[1].data.describes).toBe(exchanges[0].hash);
-  expect(exchanges.map((e) => e.data.prompt_version)).toEqual([2, 2]);
+  expect(exchanges.map((e) => e.data.prompt_version)).toEqual([3, 3]);
   const [applied] = await logged(page, "step.applied");
   expect(applied.data.exchange).toBe(exchanges[1].hash);
   expect((applied.data.steps as unknown[])[0]).toMatchObject({

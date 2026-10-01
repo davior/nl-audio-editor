@@ -23,7 +23,9 @@ use crate::scope::Scope;
 
 /// Recorded with every exchange, so a change of wording is visible in the data.
 /// Version 2: tiered tools, with the index of further operations.
-pub const PROMPT_VERSION: u32 = 2;
+/// Version 3: the model is told it may ask to see operations only once, and the
+/// follow-up that answers it no longer offers `describe_operations`.
+pub const PROMPT_VERSION: u32 = 3;
 
 /// The tool the model calls to see the parameters of operations in the index.
 pub const DESCRIBE_TOOL: &str = "describe_operations";
@@ -119,7 +121,7 @@ pub fn system_message() -> String {
         .map(|d| format!("- {}: {}. {}", d.id, d.title, d.summary))
         .collect();
     format!(
-        "{SYSTEM_PROMPT}\n\nMore operations, not among the tools. To use one, first call `{DESCRIBE_TOOL}` with its id to see its parameters; then call it.\n{}",
+        "{SYSTEM_PROMPT}\n\nMore operations, not among the tools. To use one, first call `{DESCRIBE_TOOL}` with the ids of every operation you might need, to see their parameters; then call one of them. You can ask only once.\n{}",
         lines.join("\n")
     )
 }
@@ -167,7 +169,7 @@ pub fn tools() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": DESCRIBE_TOOL,
-                "description": "See the parameters of operations listed in the instructions, before using them.",
+                "description": "See the parameters of operations listed in the instructions, before using them. It can be called once: name every operation you might need.",
                 "parameters": {
                     "type": "object",
                     "required": ["ids"],
@@ -304,8 +306,11 @@ pub fn build_correction(
 
 /// A follow-up answering a `describe_operations` call: the earlier request and
 /// response are replayed, the call is answered with the operations' tool
-/// schemas, and those operations become tools. Any other call in the same
-/// answer is answered as not run, to be made again.
+/// schemas, and those operations become tools. The model has one chance to ask
+/// (`next_round`), so `describe_operations` is withdrawn and the answer says
+/// so: a tool that is offered and then refused only invites the call it
+/// refuses. Any other call in the same answer is answered as not run, to be
+/// made again.
 pub fn build_expansion(request: &Value, response: &Value, ids: &[String]) -> Result<Value, String> {
     let reg = registry();
     let schemas = ids
@@ -324,7 +329,12 @@ pub fn build_expansion(request: &Value, response: &Value, ids: &[String]) -> Res
         .unwrap_or_default();
     let mut messages = req["messages"].as_array().cloned().unwrap_or_default();
     messages.push(message);
-    let described = serde_json::to_string(&schemas).map_err(|e| e.to_string())?;
+    let described = format!(
+        "Described: {}. They are tools now: call one of them, `plan` or any other tool. \
+         `{DESCRIBE_TOOL}` cannot be called again.\n{}",
+        ids.join(", "),
+        serde_json::to_string(&schemas).map_err(|e| e.to_string())?
+    );
     for c in calls {
         let content = if c["function"]["name"] == DESCRIBE_TOOL {
             described.clone()
@@ -334,8 +344,8 @@ pub fn build_expansion(request: &Value, response: &Value, ids: &[String]) -> Res
         messages.push(json!({ "role": "tool", "tool_call_id": c["id"], "content": content }));
     }
     req["messages"] = Value::Array(messages);
-    let tools = req["tools"].as_array().cloned().unwrap_or_default();
-    let mut tools = tools;
+    let mut tools = req["tools"].as_array().cloned().unwrap_or_default();
+    tools.retain(|t| t["function"]["name"] != DESCRIBE_TOOL);
     for s in schemas {
         let name = &s["function"]["name"];
         if !tools.iter().any(|t| &t["function"]["name"] == name) {
@@ -417,7 +427,11 @@ mod tests {
         let last = msgs.last().unwrap();
         assert_eq!(last["role"], "tool");
         assert_eq!(last["tool_call_id"], "call_1");
-        assert!(last["content"].as_str().unwrap().contains("db_per_octave"));
+        let answer = last["content"].as_str().unwrap();
+        assert!(answer.contains("db_per_octave"));
+        // The answer says what the model has now, and that it cannot look again.
+        assert!(answer.starts_with("Described: tilt."), "{answer}");
+        assert!(answer.contains("cannot be called again"), "{answer}");
         let names: Vec<&str> = next["tools"]
             .as_array()
             .unwrap()
@@ -425,7 +439,29 @@ mod tests {
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert_eq!(names.iter().filter(|n| **n == "tilt").count(), 1);
+        // The one chance to look is spent, so the tool is no longer offered; the
+        // rest of the tools are as they were.
+        assert!(!names.contains(&DESCRIBE_TOOL));
+        assert!(names.contains(&"plan") && names.contains(&"noise_reduce"));
+        assert_eq!(
+            next["tools"].as_array().unwrap().len(),
+            req["tools"].as_array().unwrap().len()
+        );
         assert!(build_expansion(&req, &resp, &["no_such_op".to_string()]).is_err());
+    }
+
+    #[test]
+    fn the_model_is_told_it_can_ask_to_see_operations_once() {
+        let said = system_message();
+        assert!(
+            said.contains(&format!("`{DESCRIBE_TOOL}`")) && said.contains("You can ask only once.")
+        );
+        let tool = tools()
+            .into_iter()
+            .find(|t| t["function"]["name"] == DESCRIBE_TOOL)
+            .unwrap();
+        let description = tool["function"]["description"].as_str().unwrap();
+        assert!(description.contains("once"), "{description}");
     }
 
     #[test]

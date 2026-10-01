@@ -69,8 +69,10 @@ entries is refused as data rather than description. The check runs three times:
 3. again when the exchange is logged.
 
 The instructions are `SYSTEM_PROMPT` followed by the index of on-demand operations
-(`system_message`), versioned by `PROMPT_VERSION` (currently 2: version 1 had no index and
-offered every operation as a tool). The version is recorded with every exchange, so a change
+(`system_message`), versioned by `PROMPT_VERSION` (currently 3: version 1 had no index and
+offered every operation as a tool; version 2 added the index, with `describe_operations` offered
+in every round; version 3 tells the model it may ask to see operations once, and withdraws the
+tool once it has). The version is recorded with every exchange, so a change
 of wording shows in the data. Dataset records use the same instructions and the same
 user-message format.
 
@@ -92,6 +94,13 @@ the conversation, answers the call with those operations' full tool schemas and 
 the tools; any other call in the same answer is answered as not run, to be made again. The
 model then answers as usual. The describe call wins over anything else in that answer. An
 unknown or system id is a problem like any other; a core one is simply described again.
+
+The model has this one chance, and is told so: the index and the tool's description say it can
+ask only once, and to name every operation it might need. The follow-up does not offer
+`describe_operations` again, and its answer to the call says what was described, that those are
+tools now, and that the call cannot be repeated. A tool that is offered and then refused invites
+the very call it refuses: this was found when a model, shown some operations, asked to see
+another and the request failed on the second call.
 
 ## Routine requests are answered locally
 
@@ -150,7 +159,10 @@ predictable. It is deterministic and tested with a table of cases.
 The rounds that may follow an answer are decided in the core (`next_round`), so the browser
 and the command line follow the same policy:
 - **Describe**, at most once: the model asked to see on-demand operations, so it is sent their
-  schemas (above). A second `describe_operations` call is treated as an unusable answer.
+  schemas (above). A second `describe_operations` call is treated as an unusable answer; the
+  tool is no longer offered by then, so it is the model calling a tool it was not given. The
+  correction (and so a final failure) says that the call was already made, and that the
+  operations it described are tools now.
 - **Correct**, at most once: when the answer cannot be used, the problems are returned as the
   result of each tool call (`build_correction`) and the model is asked to correct itself.
 - **Done:** a usable answer is previewed, or a reply in words is shown; if the corrected answer
